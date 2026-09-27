@@ -8,8 +8,7 @@ use soroban_sdk::{
     testutils::{Address as _, Ledger},
     token, Env,
 };
-use std::vec;
-
+#[allow(dead_code)]
 fn setup_token<'a>(
     env: &'a Env,
     admin: &Address,

@@ -616,6 +616,18 @@ impl AidContract {
         );
         shared_set_paused(&env, paused);
     }
+
+    /// Returns a paginated list of aid records created by `donor`.
+    pub fn list_aids_by_donor(env: Env, donor: Address, cursor: u32, limit: u32) -> AidPage {
+        let ids = storage::get_donor_aids(&env, &donor);
+        paginate(&env, &ids, cursor, limit)
+    }
+
+    /// Returns a paginated list of aid records assigned to `recipient`.
+    pub fn list_aids_by_recipient(env: Env, recipient: Address, cursor: u32, limit: u32) -> AidPage {
+        let ids = storage::get_recipient_aids(&env, &recipient);
+        paginate(&env, &ids, cursor, limit)
+    }
 }
 
 fn require_admin(env: &Env, admin: &Address) -> Result<(), AidError> {
@@ -670,7 +682,6 @@ fn remove_from_search_index(env: &Env, aid_id: u64) {
 ///
 /// Records whose storage entries were evicted are skipped without stalling
 /// the cursor, so pagination always makes forward progress.
-#[allow(dead_code)]
 fn paginate(env: &Env, ids: &Vec<u64>, cursor: u32, limit: u32) -> AidPage {
     let effective_limit = if limit > MAX_QUERY_LIMIT {
         MAX_QUERY_LIMIT
