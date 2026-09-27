@@ -135,6 +135,70 @@ pub enum JobStatus {
     Succeeded,
 }
 
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackoffMode {
+    /// Exponential backoff: `base * 2^(attempt - 1)` capped at max.
+    Exponential,
+    /// Linear backoff: `base * attempt` capped at max.
+    Linear,
+    /// Fixed interval backoff: constant `base`.
+    Fixed,
+    /// Jittered backoff: pseudorandomized backoff using deterministic seed.
+    Jittered,
+}
+
+/// Classify error codes into retryable (transient) vs terminal (permanent).
+pub fn is_retryable_error(code: u32) -> bool {
+    use crate::errors::Error as E;
+    // Permanent non-retryable errors that must immediately dead-letter
+    let permanent = [
+        E::Unauthorized as u32,
+        E::NotFound as u32,
+        E::InvalidAmount as u32,
+        E::Overflow as u32,
+        E::ContractPaused as u32,
+        E::AlreadyClaimed as u32,
+        E::InsufficientBalance as u32,
+        E::WithdrawalLimitExceeded as u32,
+        E::InvalidArgument as u32,
+        E::NotPaused as u32,
+        E::ProposalNotFound as u32,
+        E::AlreadyApproved as u32,
+        E::BelowThreshold as u32,
+        E::AlreadyExecuted as u32,
+        E::ImmutableEntry as u32,
+        E::InvalidHash as u32,
+        E::MetadataNotFound as u32,
+        E::AlreadyInitialized as u32,
+        E::UnsupportedSchemaVersion as u32,
+        E::UnsafeSecret as u32,
+        E::ProposalExpired as u32,
+        E::ProposalCancelled as u32,
+    ];
+
+    for &perm in &permanent {
+        if code == perm {
+            return false;
+        }
+    }
+    true
+}
+
+/// Detailed forensic record of a dead-lettered job for maintainer inspection.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeadLetterRecord {
+    pub job_id: u64,
+    pub kind: JobKind,
+    pub payload: JobPayload,
+    pub attempts: u32,
+    pub last_error: u32,
+    pub failed_at_ledger: u32,
+    pub worker: Option<Address>,
+    pub dedupe_key: BytesN<32>,
+}
+
 /// Retry policy written into every job at enqueue time.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,6 +250,23 @@ impl RetryPolicy {
         self.base_backoff_ledgers
             .saturating_mul(1u32 << shift)
             .min(self.max_backoff_ledgers)
+    }
+
+    /// Backoff calculation supporting Linear, Fixed, Exponential, and Jittered backoff modes.
+    pub fn backoff_with_mode(self, attempt: u32, mode: BackoffMode, seed: u64) -> u32 {
+        match mode {
+            BackoffMode::Exponential => self.backoff_after(attempt),
+            BackoffMode::Linear => {
+                let interval = self.base_backoff_ledgers.saturating_mul(attempt.max(1));
+                interval.min(self.max_backoff_ledgers)
+            }
+            BackoffMode::Fixed => self.base_backoff_ledgers.min(self.max_backoff_ledgers),
+            BackoffMode::Jittered => {
+                let base = self.backoff_after(attempt);
+                let jitter = ((seed % 7) as u32).saturating_mul(self.base_backoff_ledgers / 4);
+                base.saturating_add(jitter).min(self.max_backoff_ledgers)
+            }
+        }
     }
 }
 
@@ -342,6 +423,8 @@ pub enum WorkerKey {
     DeadLetters,
     /// `Job`.
     Job(u64),
+    /// `DeadLetterRecord` forensic record.
+    DeadLetterRecord(u64),
     /// `JobReceipt` for a completed dedupe key.
     Receipt(BytesN<32>),
     /// `u64` id currently holding a dedupe key.
@@ -600,10 +683,23 @@ fn attempt_job<H: JobHandler>(
             Ok(RunOutcome::Succeeded(job))
         }
         Err(err) => {
-            job.last_error = contract_error_code(err);
-            if job.attempts >= job.policy.max_attempts {
+            let code = contract_error_code(err);
+            job.last_error = code;
+            let retryable = is_retryable_error(code);
+            if !retryable || job.attempts >= job.policy.max_attempts {
                 job.status = JobStatus::DeadLettered;
                 save_job(env, &job);
+                let dl_record = DeadLetterRecord {
+                    job_id: job.id,
+                    kind: job.kind,
+                    payload: job.payload.clone(),
+                    attempts: job.attempts,
+                    last_error: code,
+                    failed_at_ledger: now,
+                    worker: job.worker.clone(),
+                    dedupe_key: job.dedupe_key.clone(),
+                };
+                persistent_set(env, &WorkerKey::DeadLetterRecord(job.id), &dl_record);
                 index_remove(env, &WorkerKey::Pending, job.id);
                 index_push(env, &WorkerKey::DeadLetters, job.id);
                 persist_counters(env, |c| {
@@ -673,6 +769,53 @@ pub fn discard_dead_letter(
 /// Read one job.
 pub fn get_job(env: &Env, job_id: u64) -> Option<Job> {
     load_job(env, job_id)
+}
+
+/// Read forensic dead letter record.
+pub fn get_dead_letter_record(env: &Env, job_id: u64) -> Option<DeadLetterRecord> {
+    persistent_get(env, &WorkerKey::DeadLetterRecord(job_id))
+}
+
+/// Retrieve dead letter records for maintainer inspection.
+pub fn list_dead_letters(env: &Env, cursor: Option<u64>, limit: u32) -> Vec<DeadLetterRecord> {
+    let ids = dead_letter_job_ids(env);
+    let mut records = Vec::new(env);
+    let total = ids.len();
+    let mut start_idx = 0u32;
+    if let Some(c) = cursor {
+        let mut i = 0u32;
+        while i < total {
+            if ids.get(i).unwrap_or(0) > c {
+                start_idx = i;
+                break;
+            }
+            i += 1;
+        }
+        if i == total {
+            return records;
+        }
+    }
+
+    let mut idx = start_idx;
+    while idx < total && (records.len() as u32) < limit {
+        let id = ids.get(idx).unwrap_or(0);
+        if let Some(rec) = get_dead_letter_record(env, id) {
+            records.push_back(rec);
+        } else if let Some(job) = load_job(env, id) {
+            records.push_back(DeadLetterRecord {
+                job_id: job.id,
+                kind: job.kind,
+                payload: job.payload,
+                attempts: job.attempts,
+                last_error: job.last_error,
+                failed_at_ledger: job.last_attempt_ledger,
+                worker: job.worker,
+                dedupe_key: job.dedupe_key,
+            });
+        }
+        idx += 1;
+    }
+    records
 }
 
 /// Read the completion receipt for a dedupe key.

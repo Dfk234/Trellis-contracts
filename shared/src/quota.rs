@@ -362,34 +362,36 @@ mod tests {
 
     #[test]
     fn feature_flag_bypass_skips_enforcement_and_rolls_back() {
-        let (env, actor, resource) = setup();
-        set_quota_config(
-            &env,
-            &resource,
-            &QuotaConfig {
-                max_ops_per_window: 1,
-                window_ledgers: 100,
-                max_storage_entries: 10,
-                max_amount_per_op: 0,
-                allow_override: true,
-            },
-        )
-        .unwrap();
-        assert!(check_and_consume(&env, &actor, &resource, 0).is_ok());
-        assert_eq!(
-            check_and_consume(&env, &actor, &resource, 0),
-            Err(Error::QuotaExceeded)
-        );
+        let (env, actor, resource, contract) = setup();
+        env.as_contract(&contract, || {
+            set_quota_config(
+                &env,
+                &resource,
+                &QuotaConfig {
+                    max_ops_per_window: 1,
+                    window_ledgers: 100,
+                    max_storage_entries: 10,
+                    max_amount_per_op: 0,
+                    allow_override: true,
+                },
+            )
+            .unwrap();
+            assert!(check_and_consume(&env, &actor, &resource, 0).is_ok());
+            assert_eq!(
+                check_and_consume(&env, &actor, &resource, 0),
+                Err(Error::QuotaExceeded)
+            );
 
-        // Maintainer enables the emergency bypass flag -> enforcement is skipped.
-        set_flag(&env, &FeatureFlag::QuotaBypass, true, 10_000).unwrap();
-        assert!(check_and_consume(&env, &actor, &resource, 0).is_ok());
+            // Maintainer enables the emergency bypass flag -> enforcement is skipped.
+            crate::feature_flags::set_flag(&env, &crate::feature_flags::FeatureFlag::QuotaBypass, true, 10_000).unwrap();
+            assert!(check_and_consume(&env, &actor, &resource, 0).is_ok());
 
-        // Emergency rollback restores enforcement.
-        crate::feature_flags::emergency_disable(&env, &FeatureFlag::QuotaBypass);
-        assert_eq!(
-            check_and_consume(&env, &actor, &resource, 0),
-            Err(Error::QuotaExceeded)
-        );
+            // Emergency rollback restores enforcement.
+            crate::feature_flags::emergency_disable(&env, &crate::feature_flags::FeatureFlag::QuotaBypass);
+            assert_eq!(
+                check_and_consume(&env, &actor, &resource, 0),
+                Err(Error::QuotaExceeded)
+            );
+        });
     }
 }

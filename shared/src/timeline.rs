@@ -549,7 +549,6 @@ pub fn record_action_audit_event(
     before: Option<i128>,
     after: Option<i128>,
 ) -> Result<ActionAuditEntry, Error> {
-    actor.require_auth();
     write_action_audit_entry(
         env,
         actor.clone(),

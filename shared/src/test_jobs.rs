@@ -651,3 +651,80 @@ fn an_escrow_released_before_expiry_dead_letters_its_refund_job() {
         assert_eq!(get_job(&env, job_id).unwrap().status, JobStatus::DeadLettered);
     });
 }
+
+#[test]
+fn test_non_retryable_error_immediately_dead_letters() {
+    struct PermanentFailureHandler;
+    impl JobHandler for PermanentFailureHandler {
+        fn handle(&self, _env: &Env, _job: &Job) -> Result<(), Error> {
+            Err(Error::Unauthorized)
+        }
+    }
+
+    let env = Env::default();
+    let (contract_id, _admin) = setup(&env);
+
+    env.as_contract(&contract_id, || {
+        let dedupe = key(&env, 99, 1);
+        let EnqueueOutcome::Created(id) =
+            enqueue_job(&env, JobPayload::None, dedupe.clone(), 10, Some(RetryPolicy::maintenance())).unwrap()
+        else {
+            panic!("expected job creation");
+        };
+
+        let worker = Address::generate(&env);
+        // Attempt 1 fails with permanent non-retryable error (Unauthorized)
+        let outcome = run_due_job(&env, &worker, 10, &PermanentFailureHandler).unwrap();
+        let RunOutcome::DeadLettered(job) = outcome else {
+            panic!("expected non-retryable error to immediately dead-letter");
+        };
+
+        assert_eq!(job.id, id);
+        assert_eq!(job.status, JobStatus::DeadLettered);
+        assert_eq!(job.attempts, 1);
+        assert_eq!(job.last_error, 1); // Unauthorized
+
+        // Verify DeadLetterRecord is saved
+        let dl = crate::jobs::get_dead_letter_record(&env, id).expect("DeadLetterRecord missing");
+        assert_eq!(dl.job_id, id);
+        assert_eq!(dl.last_error, 1);
+        assert_eq!(dl.attempts, 1);
+
+        // Verify list_dead_letters returns the record
+        let dl_list = crate::jobs::list_dead_letters(&env, None, 10);
+        assert_eq!(dl_list.len(), 1);
+        assert_eq!(dl_list.get(0).unwrap().job_id, id);
+    });
+}
+
+#[test]
+fn test_backoff_modes() {
+    use crate::jobs::BackoffMode;
+    let policy = RetryPolicy {
+        max_attempts: 5,
+        base_backoff_ledgers: 10,
+        max_backoff_ledgers: 100,
+    };
+
+    // Exponential: 10 * 2^(attempt - 1)
+    assert_eq!(policy.backoff_with_mode(1, BackoffMode::Exponential, 0), 10);
+    assert_eq!(policy.backoff_with_mode(2, BackoffMode::Exponential, 0), 20);
+    assert_eq!(policy.backoff_with_mode(3, BackoffMode::Exponential, 0), 40);
+    assert_eq!(policy.backoff_with_mode(4, BackoffMode::Exponential, 0), 80);
+    assert_eq!(policy.backoff_with_mode(5, BackoffMode::Exponential, 0), 100); // capped at 100
+
+    // Linear: 10 * attempt
+    assert_eq!(policy.backoff_with_mode(1, BackoffMode::Linear, 0), 10);
+    assert_eq!(policy.backoff_with_mode(2, BackoffMode::Linear, 0), 20);
+    assert_eq!(policy.backoff_with_mode(3, BackoffMode::Linear, 0), 30);
+    assert_eq!(policy.backoff_with_mode(10, BackoffMode::Linear, 0), 100); // capped at 100
+
+    // Fixed: constant 10
+    assert_eq!(policy.backoff_with_mode(1, BackoffMode::Fixed, 0), 10);
+    assert_eq!(policy.backoff_with_mode(5, BackoffMode::Fixed, 0), 10);
+
+    // Jittered
+    let j1 = policy.backoff_with_mode(1, BackoffMode::Jittered, 12345);
+    assert!(j1 >= 10 && j1 <= 100);
+}
+

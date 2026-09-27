@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env, Symbol, Val};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env, Symbol};
 use crate::storage::{persistent_get, persistent_set};
 
 #[contracttype]
@@ -15,13 +15,13 @@ pub struct HistoryRecord {
 
 #[contracttype]
 pub enum HistoryKey {
-    LatestHistoryHash(Val),
-    HistoryEntry(Val, u64),
+    LatestHistoryHash(Symbol),
+    HistoryEntry(Symbol, u64),
 }
 
 pub fn record_mutation(
     env: &Env,
-    record_id: Val,
+    record_id: Symbol,
     actor: Address,
     reason: Symbol,
     before_hash: BytesN<32>,
@@ -41,10 +41,8 @@ pub fn record_mutation(
         timestamp: env.ledger().timestamp(),
     };
 
-    let mut b = Bytes::new(env);
-    b.append(&record.id.clone().into_val(env));
-    // simplistic hashing for proof of concept
-    let new_hash = env.crypto().sha256(&b);
+    let id_bytes = Bytes::from_slice(env, &record.id.to_be_bytes());
+    let new_hash: BytesN<32> = env.crypto().sha256(&id_bytes).into();
 
     persistent_set(env, &HistoryKey::HistoryEntry(record_id.clone(), record.id), &record);
     persistent_set(env, &latest_key, &(new_hash.clone(), record.id));

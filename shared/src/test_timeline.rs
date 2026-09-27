@@ -4,7 +4,7 @@ extern crate std;
 
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
-    testutils::{Address as _, Ledger as _},
+    testutils::{Address as _, Events as _, Ledger as _},
     Address, Bytes, Env, FromVal, IntoVal, Vec,
 };
 
@@ -327,8 +327,6 @@ fn action_audit_records_actor_scope_reason_timestamp_and_state_context() {
             symbol_short!("treasury"),
             symbol_short!("wd_limit"),
             symbol_short!("admin_cfg"),
-            None,
-            None,
             None,
             None,
             Some(100),
