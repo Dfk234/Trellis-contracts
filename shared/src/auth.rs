@@ -200,7 +200,16 @@ pub fn role_for_permission(permission: Permission) -> Role {
 
 /// Returns whether `user` holds the role required for `permission`.
 pub fn has_permission(env: &Env, user: &Address, permission: Permission) -> bool {
-    has_role(env, user, role_for_permission(permission))
+    if has_role(env, user, role_for_permission(permission.clone())) {
+        return true;
+    }
+
+    match permission {
+        Permission::UseOwnResources | Permission::ServiceOperation | Permission::SubmitOracle => {
+            false
+        }
+        _ => has_admin_authority(env, user),
+    }
 }
 
 /// Checks a named capability and the caller's on-chain signature.
@@ -209,7 +218,23 @@ pub fn require_permission(
     caller: &Address,
     permission: Permission,
 ) -> Result<(), Error> {
-    require_role(env, caller, role_for_permission(permission))
+    if !has_permission(env, caller, permission) {
+        return Err(Error::Unauthorized);
+    }
+    caller.require_auth();
+    Ok(())
+}
+
+fn has_admin_authority(env: &Env, user: &Address) -> bool {
+    if has_role(env, user, Role::Admin) {
+        return true;
+    }
+
+    env.storage()
+        .instance()
+        .get::<Symbol, Address>(&KEY_ADMIN)
+        .map(|admin| admin == *user)
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------

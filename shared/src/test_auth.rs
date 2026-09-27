@@ -287,6 +287,33 @@ fn named_permission_requires_a_granted_role_and_authentication() {
 }
 
 #[test]
+fn admin_permissions_preserve_existing_maintainer_access() {
+    let (env, contract_id, admin) = setup();
+    let delegated_admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        assert!(has_permission(&env, &admin, Permission::TreasuryOperations));
+        assert_eq!(
+            require_permission(&env, &admin, Permission::UpgradeContracts),
+            Ok(())
+        );
+
+        grant_role(&env, &admin, &delegated_admin, Role::Admin).unwrap();
+        assert!(has_permission(
+            &env,
+            &delegated_admin,
+            Permission::PauseContracts
+        ));
+        assert_eq!(
+            require_permission(&env, &delegated_admin, Permission::ReferralConfiguration),
+            Ok(())
+        );
+
+        assert!(!has_permission(&env, &admin, Permission::ServiceOperation));
+        assert!(!has_permission(&env, &admin, Permission::SubmitOracle));
+    });
+}
+
+#[test]
 fn initialize_admin_requires_signature_and_cannot_be_repeated() {
     let env = Env::default();
     env.mock_all_auths();

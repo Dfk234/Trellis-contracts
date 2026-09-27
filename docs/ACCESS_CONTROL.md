@@ -15,7 +15,7 @@ the caller's Soroban authorization.
 | Actor / role | Capabilities | Enforcement |
 |---|---|---|
 | End user (`EndUser`) | Use only their own user-scoped resources | Entry point checks the resource owner and requires that address to authorize |
-| Maintainer (`Admin`) | Change configuration, manage roles, read maintainer audit records | Admin role plus caller authorization; legacy admin-only entrypoints also verify the stored admin address |
+| Maintainer (`Admin`) | Change configuration, manage roles, treasury operations, pause/resume, referral configuration, upgrades, and read maintainer audit records | Admin role (or the legacy stored admin address) plus caller authorization |
 | Treasury manager (`TreasuryManager`) | Deposit and withdraw treasury funds | `TreasuryOperations` permission |
 | Pauser (`Pauser`) | Pause or resume the aid contract | `PauseContracts` permission; Admin can grant or revoke this role |
 | Referral manager (`ReferralManager`) | Change referral configuration | `ReferralConfiguration` permission; Admin can grant or revoke this role |
@@ -26,6 +26,12 @@ the caller's Soroban authorization.
 End users are authorized by ownership and signature, not by a global role that
 would grant access to other users' records. A contract may use `EndUser` for an
 additional allowlist policy, but must still check resource ownership.
+
+Admin is the maintainer super-role; the specialized manager roles provide
+delegation for non-admin accounts. Admin does not imply `ServiceActor` or
+`OracleSigner`, which remain explicitly registered. The stored-admin fallback
+preserves maintainer permissions on deployments created before shared role
+entries existed.
 
 The treasury's configured referral contract receives `ServiceActor` when set;
 replacing it revokes the prior service role. Other contract-to-contract
