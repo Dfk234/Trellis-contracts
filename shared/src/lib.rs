@@ -2,12 +2,14 @@
 
 pub mod auth;
 pub mod batch;
+pub mod canonical;
 pub mod compat;
 pub mod config;
 pub mod errors;
 pub mod events;
 pub mod feature_flags;
 pub mod math;
+pub mod migration;
 pub mod payments;
 pub mod quota;
 pub mod storage;
@@ -25,6 +27,12 @@ pub use feature_flags::{
     default_config, emergency_disable, flag_status, get_flag, is_enabled, is_enabled_for,
     require_enabled, rollout_bucket, set_flag, FeatureFlag, FeatureFlagConfig, FeatureFlagError,
     FeatureFlagStatus, FULL_ROLLOUT_BPS,
+};
+pub use migration::{
+    begin_migration, clear_journal, dry_run, evaluate_post_checks, expected_step, fail_migration,
+    finish_migration, is_resumable, load_journal, mark_step_complete, resume_index, save_journal,
+    DryRunReport, MigrationError, MigrationJournal, MigrationPlan, MigrationStatus, MigrationStep,
+    MigrationStepKind, PostCheck, PostCheckReport, RollbackStrategy,
 };
 pub use compat::{
     current_schema_version, downgrade_v2_to_v1, ensure_supported_version, from_latest,
@@ -63,6 +71,11 @@ pub use storage::{
 };
 pub use utils::{is_expired, now};
 
+pub use canonical::{
+    canonical_bytes, canonical_fingerprint, canonicalize_legacy, ensure_supported_encoding,
+    is_legacy_encoding, normalize_int, normalize_text, parse_legacy_kv, CanonicalPart,
+    CANONICAL_ENCODING_VERSION, LEGACY_ENCODING_VERSION, MAX_FIELD_LEN,
+};
 #[cfg(test)]
 mod test_auth;
 #[cfg(test)]
