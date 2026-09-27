@@ -1,0 +1,26 @@
+name: Release Readiness
+
+# Enforces that the PR body's own checklist (.github/PULL_REQUEST_TEMPLATE.md)
+# is actually complete (Issue #128) — the per-job CI checks in ci.yml verify
+# the underlying commands pass, but nothing previously verified the checklist
+# itself was filled in. See docs/RELEASE_READINESS.md.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches: [main, develop]
+
+jobs:
+  checklist:
+    name: PR checklist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write PR body to a file
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > pr-body.md
+
+      - name: Check the readiness checklist
+        run: node scripts/check-pr-checklist.cjs --body-file pr-body.md

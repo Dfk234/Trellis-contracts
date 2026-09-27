@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `shared::disclosure`: progressive disclosure of transaction detail fields, where a `Critical`-severity field can never end up reachable only through the advanced/expanded view (#125)
+- Machine-readable changelog (`changelog/entries.json` + `changelog/schema.json`) for protocol-facing changes, validated in CI (#126); see `docs/CHANGELOG_SCHEMA.md`
+- Fault-injection test suite (`testing/src/fault_injection.rs`) exercising the sandbox's fake oracle/token/RPC adapters for hard failures, staleness, insufficient balance, and submission timeouts, proving each fails actionably with no partial state (#127)
+- PR checklist enforcement (`scripts/check-pr-checklist.cjs`, new `release-readiness.yml` workflow) so an incomplete `.github/PULL_REQUEST_TEMPLATE.md` checklist fails CI instead of only reviewer attention; documented in `docs/RELEASE_READINESS.md` (#128)
 - Cross-contract integration test suite covering full aid lifecycle, expiry flows, authorization boundaries, partial failure recovery, and referral commission distribution
 - WASM size budget check in CI with per-contract limits and PR comments showing size deltas
 - Automated API documentation publishing to GitHub Pages on every merge to main
@@ -19,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Enhanced rustdoc crate-level documentation with usage examples and cross-references
 - Updated CI workflow to include WASM size measurement step
+
+### Fixed
+- `shared`'s `health`, `reconciliation`, and `telemetry` modules were re-exported (`pub use health::{...}` etc.) without a matching `mod` declaration in `shared/src/lib.rs` — an unresolved-module compile error for the whole workspace. Added the three missing `pub mod` declarations.
 
 ---
 

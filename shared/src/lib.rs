@@ -7,9 +7,17 @@ pub mod batch;
 pub mod canonical;
 pub mod compat;
 pub mod config;
+pub mod disclosure;
 pub mod errors;
 pub mod error_taxonomy;
 pub mod events;
+// `health`, `reconciliation` and `telemetry` are re-exported below
+// (`pub use health::{...}` etc.) but were never declared as modules here —
+// a build break on `upstream/main` for anything that depends on this crate
+// (every contract does), since an unresolved `pub use` path is a hard
+// compile error, not a lint. See issue #125's PR for how this surfaced: it
+// couldn't be verified without the workspace building at all.
+pub mod health;
 pub mod jobs;
 pub mod lifecycle;
 pub mod math;
@@ -17,15 +25,20 @@ pub mod migration;
 pub mod payments;
 pub mod policy;
 pub mod quota;
+pub mod reconciliation;
 pub mod recovery;
 pub mod retention;
 pub mod semantic;
 pub mod storage;
+pub mod telemetry;
 pub mod timeline;
 pub mod utils;
 pub mod webhook;
 
 // Re-export the most commonly-needed items at crate root for ergonomic use.
+pub use disclosure::{
+    DetailField, DetailSeverity, TransactionDetail, TransactionDetailBuilder,
+};
 pub use auth::{
     get_admin, has_permission, initialize_admin, require_admin, require_not_paused,
     require_permission, role_for_permission, set_admin, Permission, Role,
@@ -155,6 +168,8 @@ pub use reconciliation::{
 #[cfg(test)]
 mod test_reconciliation;
 
+#[cfg(test)]
+mod test_disclosure;
 #[cfg(test)]
 mod test_auth;
 #[cfg(test)]

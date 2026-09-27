@@ -173,6 +173,36 @@ let results = fuzzer.fuzz(&UpgradeabilityFuzzConfig::default());
 assert_eq!(results.unauthorized_attempts_blocked, results.failed_attempts);
 ```
 
+## Fault Injection
+
+`fault_injection.rs` proves the sandbox's fake dependencies fail the way a
+real dependency does — an actionable `Err`, not a panic — and that a failed
+call never leaves a partial write behind (issue #127). It covers:
+
+- **Oracle**: a hard failure (`FakeOracleAdapter::fail_for`) and a stale
+  price (`mark_stale`) are both surfaced on the returned `Result`/`PriceQuote`
+  rather than silently degrading.
+- **Token**: an insufficient-balance transfer leaves both balances and the
+  supply untouched, and a retry after topping up succeeds exactly once.
+- **RPC**: a submission timeout (`FakeRpcAdapter::set_fail_next`) does not
+  advance the simulated ledger or record the operation, and the retry that
+  follows lands exactly once.
+- **Cross-dependency**: a workflow where one leg fails after another has
+  already succeeded — the successful leg's state is not rolled back or
+  double-counted by the later failure.
+
+Run just this suite:
+
+```bash
+cd testing
+cargo test fault_injection
+```
+
+These tests are fully in-process and deterministic (no RPC, no real token
+contract, no wall-clock time), so they run in CI on every PR alongside the
+rest of this crate's tests and never flake on an external service's
+availability.
+
 ## Run All Tests
 
 ```bash

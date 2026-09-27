@@ -150,6 +150,18 @@ jobs:
               body: report
             })
 
+  # Machine-readable changelog validation (Issue #126). No Rust involved —
+  # runs on the runner's preinstalled Node, matching this repo's other
+  # dependency-free Node scripts (verify-deployment.cjs, push-issues.js).
+  changelog:
+    name: Changelog schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate changelog/entries.json against changelog/schema.json
+        run: node scripts/validate-changelog.cjs
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

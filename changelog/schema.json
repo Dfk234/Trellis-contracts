@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/TRELLIS-STELLAR/Trellis-contracts/changelog/schema.json",
+  "title": "Trellis protocol-facing changelog entry",
+  "description": "Schema for changelog/entries.json (issue #126). Every entry documents one protocol-facing change: a storage layout change, a schema version bump, an event topic/payload change, or anything else that changes what an on-chain caller or an indexer observes. Purely internal changes (refactors, doc fixes, test-only additions) do not get an entry here — see docs/CHANGELOG_SCHEMA.md.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["version", "date", "impact", "summary", "migration_notes", "issue", "pr"],
+    "properties": {
+      "version": {
+        "type": "string",
+        "description": "The repository version this entry ships in, or \"unreleased\" while it is only in an open PR.",
+        "pattern": "^(unreleased|\\d+\\.\\d+\\.\\d+)$"
+      },
+      "date": {
+        "type": "string",
+        "description": "Merge date, ISO 8601 (YYYY-MM-DD). Required even for \"unreleased\" entries once merged; a still-open PR omits the entry until it merges.",
+        "format": "date",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+      },
+      "impact": {
+        "type": "string",
+        "description": "breaking: an existing caller/indexer must change to keep working. compatible: additive, existing callers are unaffected. internal: protocol-adjacent but does not change observable behavior (e.g. a new opt-in module).",
+        "enum": ["breaking", "compatible", "internal"]
+      },
+      "summary": {
+        "type": "string",
+        "description": "One sentence: what changed, from the point of view of a caller or indexer.",
+        "minLength": 1,
+        "maxLength": 240
+      },
+      "migration_notes": {
+        "type": "string",
+        "description": "What an integrator must do in response. Required and non-empty when impact is \"breaking\"; may be an empty string for \"compatible\" or \"internal\" entries with nothing to migrate.",
+        "maxLength": 2000
+      },
+      "issue": {
+        "type": ["integer", "null"],
+        "description": "The GitHub issue this change closes, if any."
+      },
+      "pr": {
+        "type": ["integer", "null"],
+        "description": "The GitHub PR that merged this change, if any."
+      }
+    },
+    "allOf": [
+      {
+        "if": { "properties": { "impact": { "const": "breaking" } } },
+        "then": { "properties": { "migration_notes": { "minLength": 1 } } }
+      }
+    ]
+  }
+}

@@ -6,6 +6,7 @@
 #![no_std]
 
 pub mod examples;
+pub mod fault_injection;
 pub mod fuzzing;
 pub mod helpers;
 pub mod mocks;

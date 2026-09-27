@@ -1,0 +1,47 @@
+[
+  {
+    "version": "unreleased",
+    "date": "2026-09-26",
+    "impact": "breaking",
+    "summary": "Record schema versioning (V1/V2) added; V1 writes are now rejected \u2014 only V2 (with token binding) may be newly written, though V1 reads remain supported indefinitely via migrate_v1_to_v2.",
+    "migration_notes": "Any integrator or off-chain indexer still writing the V1 shape (no token binding) must move to V2 before this ships to mainnet. See docs/COMPATIBILITY.md for the full read/write path and the deprecation timeline.",
+    "issue": 64,
+    "pr": 68
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-09-26",
+    "impact": "compatible",
+    "summary": "Added the migration safety framework (dry_run, MigrationJournal, post-checks, rollback strategy) in shared::migration \u2014 opt-in tooling for future schema/data migrations, not itself a change to any existing contract's interface.",
+    "migration_notes": "",
+    "issue": 51,
+    "pr": 71
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-09-27",
+    "impact": "compatible",
+    "summary": "Added a deterministic lifecycle state machine (shared::lifecycle) for AidRecord/EscrowRecord/Proposal transitions. Opt-in until individual contracts are refactored onto it; no existing contract's behavior changed.",
+    "migration_notes": "",
+    "issue": 27,
+    "pr": 105
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-09-27",
+    "impact": "internal",
+    "summary": "Added shared::disclosure: a builder for transaction-detail fields where a Critical field can never end up reachable only through the advanced view. Not yet used by any contract, so no interface changed.",
+    "migration_notes": "",
+    "issue": 125,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-09-27",
+    "impact": "internal",
+    "summary": "Added this machine-readable changelog (changelog/entries.json + schema.json) and its validator, alongside the existing prose CHANGELOG.md. Does not itself change any contract's on-chain interface.",
+    "migration_notes": "",
+    "issue": 126,
+    "pr": null
+  }
+]
