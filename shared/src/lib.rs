@@ -12,6 +12,7 @@ pub mod math;
 pub mod migration;
 pub mod payments;
 pub mod quota;
+pub mod recovery;
 pub mod retention;
 pub mod storage;
 pub mod timeline;
@@ -25,6 +26,11 @@ pub use batch::{
     ABSOLUTE_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE,
 };
 pub use errors::Error;
+pub use recovery::{
+    abandon, complete_step, diagnostics, fail_step, is_stuck, next_action, open_operation,
+    resume, OperationKind, OperationState, RecoveryCheckpoint, RecoveryDiagnostics,
+    RecoveryError, RecoveryStep, StepOutcome,
+};
 pub use recovery::{
     abandon, complete_step, diagnostics, fail_step, is_stuck, next_action, open_operation,
     resume, OperationKind, OperationState, RecoveryCheckpoint, RecoveryDiagnostics,
