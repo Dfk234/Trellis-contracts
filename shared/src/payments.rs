@@ -53,6 +53,10 @@
 use soroban_sdk::{contracttype, symbol_short, token, Address, Env, Symbol, Vec};
 
 use crate::errors::Error;
+use crate::telemetry::{
+    emit_failure, emit_success, ActorType, OP_ESCROW_CREATE, OP_ESCROW_RELEASE,
+    OP_PAYMENT_TRANSFER,
+};
 use crate::events::{
     emit, PAYMENT_ESCROW_CREATED, PAYMENT_ESCROW_REFUNDED, PAYMENT_ESCROW_RELEASED, PAYMENT_FEE,
     PAYMENT_TRANSFER,
@@ -206,12 +210,16 @@ pub fn safe_transfer(
     to: &Address,
     amount: i128,
 ) -> Result<(), Error> {
-    validate_amount(amount)?;
+    if let Err(err) = validate_amount(amount) {
+        emit_failure(env, OP_PAYMENT_TRANSFER, ActorType::User, 0);
+        return Err(err);
+    }
 
     let client = token::Client::new(env, token);
     client.transfer(from, to, &amount);
 
     emit(env, PAYMENT_TRANSFER, (from.clone(), to.clone(), amount));
+    emit_success(env, OP_PAYMENT_TRANSFER, ActorType::User, 0);
     Ok(())
 }
 
@@ -365,10 +373,14 @@ pub fn create_escrow(
     amount: i128,
     expiry_ledger: u32,
 ) -> Result<u64, Error> {
-    validate_amount(amount)?;
+    if let Err(err) = validate_amount(amount) {
+        emit_failure(env, OP_ESCROW_CREATE, ActorType::User, 0);
+        return Err(err);
+    }
 
     let current_seq = env.ledger().sequence();
     if expiry_ledger <= current_seq {
+        emit_failure(env, OP_ESCROW_CREATE, ActorType::User, 0);
         return Err(Error::InvalidArgument);
     }
 
@@ -403,6 +415,8 @@ pub fn create_escrow(
         ),
     );
 
+    emit_success(env, OP_ESCROW_CREATE, ActorType::User, 0);
+
     Ok(escrow_id)
 }
 
@@ -420,19 +434,24 @@ pub fn create_escrow(
 /// # Events
 /// Emits [`PAYMENT_ESCROW_RELEASED`] with `(escrow_id, beneficiary, amount)`.
 pub fn release_escrow(env: &Env, token: &Address, escrow_id: u64) -> Result<(), Error> {
-    let mut record: EscrowRecord =
-        persistent_read(env, &escrow_key(escrow_id)).ok_or(Error::PaymentEscrowNotFound)?;
+    let Some(mut record): Option<EscrowRecord> = persistent_read(env, &escrow_key(escrow_id)) else {
+        emit_failure(env, OP_ESCROW_RELEASE, ActorType::User, 0);
+        return Err(Error::PaymentEscrowNotFound);
+    };
 
     if record.state == EscrowState::Released {
+        emit_failure(env, OP_ESCROW_RELEASE, ActorType::User, 0);
         return Err(Error::PaymentEscrowAlreadyReleased);
     }
     if record.state == EscrowState::Refunded {
+        emit_failure(env, OP_ESCROW_RELEASE, ActorType::User, 0);
         return Err(Error::PaymentEscrowAlreadyRefunded);
     }
 
     // Check expiry — release is only possible before or at the expiry ledger.
     let current_seq = env.ledger().sequence();
     if current_seq > record.expiry_ledger {
+        emit_failure(env, OP_ESCROW_RELEASE, ActorType::User, 0);
         return Err(Error::PaymentEscrowExpired);
     }
 
@@ -454,6 +473,8 @@ pub fn release_escrow(env: &Env, token: &Address, escrow_id: u64) -> Result<(), 
         PAYMENT_ESCROW_RELEASED,
         (escrow_id, record.beneficiary, record.amount),
     );
+
+    emit_success(env, OP_ESCROW_RELEASE, ActorType::User, 0);
 
     Ok(())
 }
