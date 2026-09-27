@@ -1,0 +1,56 @@
+# Error taxonomy and safe rendering
+
+Soroban contract entrypoints return stable numeric contract errors. Their
+existing return types remain unchanged so deployed clients do not need an ABI
+migration. The shared `error_taxonomy` module converts a contract domain and
+numeric error into an `ErrorInfo` containing a stable public code, category,
+retryability, user-safe message, recovery guidance, and a 32-byte correlation
+ID.
+
+## Rendering an error
+
+Pass the contract family and numeric error code to `describe_error`. Keep the
+raw error available only in trusted diagnostics; show users the returned
+message and recovery guidance.
+
+```rust
+let info = shared::describe_error(
+    &env,
+    shared::ErrorDomain::Aid,
+    raw_contract_error,
+    transaction_hash,
+);
+```
+
+The domain disambiguates contract-local code ranges. Known validation,
+authorization, role, oracle, settlement, payment, marketplace, and upgrade
+failures have explicit mappings. Unknown codes map to `UNEXPECTED_ERROR` with
+non-retryable metadata and generic support guidance; raw internal details are
+not included in the user message.
+
+Retryability is conservative. It is true only when a later attempt can
+reasonably succeed without changing the submitted request (for example, after
+a pause ends, a quota window resets, funds arrive, or an aid record expires).
+Validation and authorization errors are not marked retryable.
+
+## Correlation IDs and Soroban failures
+
+Supply the 32-byte transaction hash as `correlation_id` when it is available.
+An API gateway may instead create a cryptographically random request ID and
+retain its mapping to the transaction hash. Include the ID in support
+responses and trusted logs.
+
+Failed Soroban invocations roll back storage and ledger events, so a contract
+cannot durably record a correlation ID from a failed invocation. The ID must
+therefore be attached at the caller/API boundary. This repository contains no
+HTTP API or UI; the shared formatter is the integration point for those
+boundaries. Contract errors remain the authoritative machine-readable result.
+
+## Validation
+
+```bash
+cargo test -p shared error_taxonomy
+```
+
+Tests cover stable validation and authorization codes, settlement retryability,
+correlation-ID preservation, and the safe fallback for unexpected errors.
