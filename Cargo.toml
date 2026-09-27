@@ -11,10 +11,10 @@ members = [
     "contracts/registry-contract",
     "contracts/upgradeability",
     "shared",
+    "testing",
     "contracts/rebalancer-contract",
     "contracts/nft-marketplace",
 ]
-exclude = ["testing"]
 
 [workspace.dependencies]
 soroban-sdk = { version = "21.0.0", default-features = true }

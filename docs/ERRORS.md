@@ -31,7 +31,11 @@ not included in the user message.
 Retryability is conservative. It is true only when a later attempt can
 reasonably succeed without changing the submitted request (for example, after
 a pause ends, a quota window resets, funds arrive, or an aid record expires).
-Validation and authorization errors are not marked retryable.
+Validation and authorization errors are not marked retryable. Stale oracle
+data is reported as `ORACLE_DATA_STALE`; callers must fetch a fresh quote
+instead of retrying the stale value. A payments-domain `SETTLEMENT_TIMEOUT`
+means the confirmation was not received; retry the pending settlement rather
+than submitting another transfer.
 
 ## Correlation IDs and Soroban failures
 

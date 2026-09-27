@@ -133,6 +133,13 @@ fn shared_definition(code: u32) -> Option<Definition> {
             "This request has expired and can no longer be completed.",
             Some("Start a new request if the action is still needed."),
         ),
+        x if x == E::StaleData as u32 => definition(
+            "ORACLE_DATA_STALE",
+            ErrorCategory::Validation,
+            false,
+            "The latest price data is too old to safely complete this action.",
+            Some("Request a fresh price quote before retrying."),
+        ),
         x if x == E::AlreadyClaimed as u32
             || x == E::AlreadyApproved as u32
             || x == E::AlreadyExecuted as u32
@@ -505,6 +512,13 @@ fn domain_definition(domain: &ErrorDomain, code: u32) -> Option<Definition> {
             ),
             _ => return None,
         }),
+        ErrorDomain::Payments if code == Error::Expired as u32 => Some(definition(
+            "SETTLEMENT_TIMEOUT",
+            ErrorCategory::Settlement,
+            true,
+            "Settlement confirmation was not received.",
+            Some("Retry the pending settlement without submitting another transfer."),
+        )),
         _ => None,
     }
 }
@@ -597,6 +611,37 @@ mod tests {
         assert_eq!(info.category, ErrorCategory::Settlement);
         assert!(info.retryable);
         assert_eq!(info.correlation_id, id);
+    }
+
+    #[test]
+    fn stale_oracle_data_requires_a_fresh_quote() {
+        let env = Env::default();
+        let info = describe_error(
+            &env,
+            ErrorDomain::Shared,
+            Error::StaleData as u32,
+            correlation_id(&env),
+        );
+
+        assert_eq!(info.code, String::from_str(&env, "ORACLE_DATA_STALE"));
+        assert_eq!(info.category, ErrorCategory::Validation);
+        assert!(!info.retryable);
+        assert!(info.recovery.is_some());
+    }
+
+    #[test]
+    fn settlement_timeout_is_retryable_without_resubmitting_payment() {
+        let env = Env::default();
+        let info = describe_error(
+            &env,
+            ErrorDomain::Payments,
+            Error::Expired as u32,
+            correlation_id(&env),
+        );
+
+        assert_eq!(info.code, String::from_str(&env, "SETTLEMENT_TIMEOUT"));
+        assert_eq!(info.category, ErrorCategory::Settlement);
+        assert!(info.retryable);
     }
 
     #[test]
