@@ -117,6 +117,14 @@ pub use canonical::{
     is_legacy_encoding, normalize_int, normalize_text, parse_legacy_kv, CanonicalPart,
     CANONICAL_ENCODING_VERSION, LEGACY_ENCODING_VERSION, MAX_FIELD_LEN,
 };
+
+pub use reconciliation::{
+    run_reconciliation, DriftItem, DriftType, ReconciliationReport, SourceRecord,
+};
+
+#[cfg(test)]
+mod test_reconciliation;
+
 #[cfg(test)]
 mod test_auth;
 #[cfg(test)]
