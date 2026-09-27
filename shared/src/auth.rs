@@ -143,7 +143,22 @@ pub fn grant_role(
     role: Role,
 ) -> Result<(), Error> {
     require_admin(env, admin_caller)?;
-    persistent_set(env, &DataKey::Role(user.clone(), role), &true);
+    let key = DataKey::Role(user.clone(), role.clone());
+    
+    // Hash based on state (false -> true)
+    let before_hash = env.crypto().sha256(&soroban_sdk::Bytes::from_slice(env, &[0]));
+    let after_hash = env.crypto().sha256(&soroban_sdk::Bytes::from_slice(env, &[1]));
+    
+    crate::history::record_mutation(
+        env,
+        soroban_sdk::IntoVal::into_val(&key, env),
+        admin_caller.clone(),
+        soroban_sdk::Symbol::new(env, "grant"),
+        before_hash,
+        after_hash,
+    );
+    
+    persistent_set(env, &key, &true);
     Ok(())
 }
 
@@ -162,7 +177,21 @@ pub fn revoke_role(
     role: Role,
 ) -> Result<(), Error> {
     require_admin(env, admin_caller)?;
-    persistent_remove(env, &DataKey::Role(user.clone(), role));
+    let key = DataKey::Role(user.clone(), role.clone());
+    if persistent_has(env, &key) {
+        let before_hash = env.crypto().sha256(&soroban_sdk::Bytes::from_slice(env, &[1]));
+        let after_hash = env.crypto().sha256(&soroban_sdk::Bytes::from_slice(env, &[0]));
+        
+        crate::history::record_mutation(
+            env,
+            soroban_sdk::IntoVal::into_val(&key, env),
+            admin_caller.clone(),
+            soroban_sdk::Symbol::new(env, "revoke"),
+            before_hash,
+            after_hash,
+        );
+        persistent_remove(env, &key);
+    }
     Ok(())
 }
 
