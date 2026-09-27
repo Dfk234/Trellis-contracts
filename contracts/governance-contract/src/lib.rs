@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, vec, Address, Env, IntoVal, Symbol,
+};
 
 use shared::auth::{self, Role};
 use shared::errors::Error;
@@ -95,6 +97,9 @@ pub enum ProposalAction {
     RevokeRole(Address, Role),
     /// Update a protocol parameter: `(key, value)`.
     SetParameter(ParameterKey, i128),
+    /// Execute a parameter update on a target contract:
+    /// `(target, function_name, key, value)`.
+    SetTargetParameter(Address, Symbol, ParameterKey, i128),
     /// Pause the contract.
     Pause,
     /// Unpause the contract.
@@ -621,6 +626,7 @@ fn action_symbol(action: &ProposalAction) -> Symbol {
         ProposalAction::GrantRole(..) => symbol_short!("grt_role"),
         ProposalAction::RevokeRole(..) => symbol_short!("rvk_role"),
         ProposalAction::SetParameter(..) => symbol_short!("set_param"),
+        ProposalAction::SetTargetParameter(..) => symbol_short!("set_tgt"),
         ProposalAction::Pause => symbol_short!("pause"),
         ProposalAction::Unpause => symbol_short!("unpause"),
     }
@@ -655,6 +661,16 @@ fn execute_action(env: &Env, action: &ProposalAction) -> ContractResult<()> {
         ProposalAction::SetParameter(key, value) => {
             validate_param(key, *value)?;
             write_param(env, key, *value);
+        }
+        ProposalAction::SetTargetParameter(target, function_name, key, value) => {
+            validate_param(key, *value)?;
+            let args = vec![env, key.clone().into_val(env), (*value).into_val(env)];
+            match env.try_invoke_contract::<(), Error>(target, function_name, args) {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => return Err(Error::InvalidArgument),
+                Err(Ok(error)) => return Err(error),
+                Err(Err(_)) => return Err(Error::InvalidArgument),
+            }
         }
         ProposalAction::Pause => {
             shared::storage::set_paused(env, true);

@@ -37,7 +37,7 @@
 use shared::events::{
     emit_action_executed, emit_aid_created, emit_module_initialized, emit_permission_changed,
 };
-use shared::storage::{is_paused, persistent_get, persistent_set, set_paused as shared_set_paused};
+use shared::storage::{is_paused, set_paused as shared_set_paused};
 use shared::{emit, Error, AID_CLAIMED, AID_CREATED, AID_REFUNDED, AID_SETTLED};
 use soroban_sdk::{
     contract, contracterror, contractimpl, panic_with_error, symbol_short, token, Address, Env,
@@ -215,7 +215,7 @@ impl AidContract {
             panic_with_error!(&env, Error::InvalidAmount);
         }
         if expiry_ledger <= env.ledger().sequence() {
-            env.panic_with_error(AidError::NotExpiredYet);
+            panic_with_error!(&env, Error::InvalidArgument);
         }
 
         // Quota enforcement (Issue #65): fail-open when unconfigured so
@@ -256,11 +256,6 @@ impl AidContract {
         };
         set_aid(&env, aid_id, &record);
         index_aid(&env, aid_id);
-
-        let mut aids: Map<u64, AidRecord> = persistent_get(&env, &KEY_AIDS)
-            .unwrap_or_else(|| Map::new(&env));
-        aids.set(aid_id, record);
-        persistent_set(&env, &KEY_AIDS, &aids);
 
         emit_aid_created(
             &env,
@@ -359,8 +354,14 @@ impl AidContract {
     /// - [`AidError::AlreadyClaimed`] — already settled.
     /// - [`AidError::AlreadyRefunded`] — already refunded.
     /// - [`AidError::NotExpiredYet`]  — expiry has not yet passed.
-    pub fn refund_aid(env: Env, aid_id: u64) -> Result<(), AidError> {
+    pub fn refund_aid(env: Env, aid_id: u64, caller: Address) -> Result<(), AidError> {
         let mut record = get_aid(&env, aid_id).ok_or(AidError::NotFound)?;
+        caller.require_auth();
+
+        let admin = shared::auth::get_admin(&env);
+        if caller != record.donor && caller != admin {
+            return Err(AidError::Unauthorized);
+        }
 
         // Check status first — avoids expensive ledger read on wrong state
         match record.status {
@@ -624,7 +625,12 @@ impl AidContract {
     }
 
     /// Returns a paginated list of aid records assigned to `recipient`.
-    pub fn list_aids_by_recipient(env: Env, recipient: Address, cursor: u32, limit: u32) -> AidPage {
+    pub fn list_aids_by_recipient(
+        env: Env,
+        recipient: Address,
+        cursor: u32,
+        limit: u32,
+    ) -> AidPage {
         let ids = storage::get_recipient_aids(&env, &recipient);
         paginate(&env, &ids, cursor, limit)
     }
