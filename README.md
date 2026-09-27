@@ -55,6 +55,7 @@
 | [testing/README.md](testing/README.md) | Testing harness setup and conventions |
 | [shared/README.md](shared/README.md) | Shared library utilities and helpers |
 | [security/README.md](security/README.md) | Security model and access control overview |
+| [docs/WORKERS.md](docs/WORKERS.md) | Background worker framework: job lifecycle, retry policy, dead letters, local runner |
 - Storage Layout
 - Documentation
 - Contribution Guide

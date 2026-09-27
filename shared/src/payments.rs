@@ -61,6 +61,9 @@ use crate::events::{
     emit, PAYMENT_ESCROW_CREATED, PAYMENT_ESCROW_REFUNDED, PAYMENT_ESCROW_RELEASED, PAYMENT_FEE,
     PAYMENT_TRANSFER,
 };
+use crate::jobs::{
+    enqueue_escrow_refund, EnqueueOutcome, Job, JobError, JobHandler, JobPayload,
+};
 use crate::storage::{persistent_get, persistent_read, persistent_set};
 
 // ===========================================================================
@@ -523,6 +526,76 @@ pub fn refund_escrow(env: &Env, token: &Address, escrow_id: u64) -> Result<(), E
     );
 
     Ok(())
+}
+
+// ===========================================================================
+// Background worker integration (Issue #35)
+// ===========================================================================
+
+/// Job handler that refunds an escrow deposit through the worker framework.
+///
+/// A refund is only valid once `expiry_ledger` has passed, so the work is
+/// inherently delayed. Instead of every caller polling [`refund_escrow`] until
+/// it stops returning [`Error::PaymentEscrowNotExpired`], the deposit can be
+/// *scheduled* as a job and the crank retries it with backoff until it
+/// succeeds — and dead-letters it with full context if it never does.
+pub struct EscrowRefundHandler;
+
+impl JobHandler for EscrowRefundHandler {
+    fn handle(&self, env: &Env, job: &Job) -> Result<(), Error> {
+        match &job.payload {
+            JobPayload::EscrowRefund(token, escrow_id) => refund_escrow(env, token, *escrow_id),
+            _ => Err(Error::InvalidArgument),
+        }
+    }
+}
+
+/// Schedule the refund of an escrow deposit for its expiry ledger.
+///
+/// Idempotent per `escrow_id`: re-scheduling an escrow whose refund is still
+/// queued, or already completed, returns the existing job instead of
+/// duplicating the work.
+pub fn schedule_escrow_refund(
+    env: &Env,
+    token: &Address,
+    escrow_id: u64,
+    expiry_ledger: u32,
+) -> Result<EnqueueOutcome, JobError> {
+    enqueue_escrow_refund(env, token.clone(), escrow_id, expiry_ledger)
+}
+
+/// Create an escrow deposit **and** schedule its expiry refund as a job.
+///
+/// This is the delayed half of the escrow lifecycle moved into the worker
+/// framework: the deposit is still created atomically, but the refund is
+/// handed to the worker (retries, backoff, dead-letter) instead of waiting for
+/// an external caller to poll [`refund_escrow`].
+///
+/// # Errors
+/// Everything [`create_escrow`] can return, plus [`Error::ContractPaused`]
+/// when the worker is disabled and [`Error::ConfigInvalid`] when its retry
+/// policy is unusable.
+pub fn create_escrow_with_refund_job(
+    env: &Env,
+    token: &Address,
+    depositor: &Address,
+    beneficiary: &Address,
+    amount: i128,
+    expiry_ledger: u32,
+) -> Result<(u64, EnqueueOutcome), Error> {
+    let escrow_id = create_escrow(env, token, depositor, beneficiary, amount, expiry_ledger)?;
+    let outcome = schedule_escrow_refund(env, token, escrow_id, expiry_ledger)
+        .map_err(worker_error_to_contract_error)?;
+    Ok((escrow_id, outcome))
+}
+
+/// Translate a framework error into the shared contract error space.
+fn worker_error_to_contract_error(err: JobError) -> Error {
+    match err {
+        JobError::Disabled => Error::ContractPaused,
+        JobError::InvalidPolicy => Error::ConfigInvalid,
+        _ => Error::InvalidArgument,
+    }
 }
 
 /// Read an escrow record by ID.
