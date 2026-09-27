@@ -11,6 +11,7 @@ mod logging;
 use fee_calculator::calculate_total_fees;
 // use logging::log_trade;
 use shared::events::emit_action_executed;
+use shared::telemetry::{ActorType, TelemetryResult, TelemetryTimer, OP_REBALANCE};
 use slippage_predictor::predict_slippage;
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Env, Symbol, Vec, U256};
 use strategy_executor::{execute_strategy, ExecutionSummary, TradeError, TradeStatus, TradeErrorKind};
@@ -49,7 +50,12 @@ impl MultiAssetRebalancer {
         dry_run: bool,
     ) -> SimulationResult {
         let total_fees = calculate_total_fees(&trades);
-        
+
+        // Observability: measure the whole rebalance request, including the
+        // execution path, and emit one structured telemetry payload on exit.
+        let timer = TelemetryTimer::start_here(&env, OP_REBALANCE, ActorType::Contract);
+        let mut telemetry_result = TelemetryResult::Success;
+
         // Accumulate slippage from each trade
         // U256 cannot be used directly with addition in no_std, so we accumulate as i128
         // then convert to U256 at the end
@@ -63,8 +69,13 @@ impl MultiAssetRebalancer {
         let total_slippage = U256::from_i128(&env, total_slippage_bps);
 
         if !dry_run {
-            let _execution_result = execute_strategy(&env, &strategy, &trades);
-            // TODO: In Phase 3.2+, capture execution details from result
+            match execute_strategy(&env, &strategy, &trades) {
+                Ok(_execution) => {}
+                // The contract still returns the simulation result to the
+                // caller (unchanged behaviour); telemetry records that the
+                // execution path itself failed so operators can see it.
+                Err(_err) => telemetry_result = TelemetryResult::Failure,
+            }
         }
 
         let result = SimulationResult {
@@ -80,6 +91,8 @@ impl MultiAssetRebalancer {
             !dry_run,
             env.ledger().timestamp(),
         );
+
+        timer.finish(&env, telemetry_result);
 
         result
     }
