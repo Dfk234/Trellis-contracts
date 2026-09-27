@@ -29,7 +29,7 @@
 //! - [`TreasuryContract::withdrawal_limit`]: View the max per-transaction limit
 //! - [`TreasuryContract::referral_contract`]: See the registered referral contract
 
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, Symbol};
 
 use shared::auth::{self, Role};
 use shared::errors::Error;
@@ -144,6 +144,11 @@ impl TreasuryContract {
         let key = (BALANCE, token.clone(), category.clone());
         let balance: i128 = env.storage().instance().get(&key).unwrap_or(0);
         let new_balance = balance.checked_add(amount).ok_or(Error::Overflow)?;
+        token::Client::new(&env, &token).transfer(
+            &caller,
+            &env.current_contract_address(),
+            &amount,
+        );
         env.storage().instance().set(&key, &new_balance);
         emit_treasury_deposit(&env, category, &caller, &token, amount, new_balance);
         emit_action_executed(
@@ -209,6 +214,7 @@ impl TreasuryContract {
 
         let remaining = balance - amount;
         instance_set(&env, &key, &remaining);
+        token::Client::new(&env, &token).transfer(&env.current_contract_address(), &to, &amount);
 
         emit_treasury_withdrawal(&env, category, &to, &token, amount, remaining);
         emit_action_executed(
@@ -254,6 +260,7 @@ impl TreasuryContract {
         // Auth check last
         auth::require_admin(&env, &caller)?;
         instance_set(&env, &key, &new_balance);
+        token::Client::new(&env, &token).transfer(&env.current_contract_address(), &to, &amount);
 
         events::emit(
             &env,
@@ -324,6 +331,11 @@ impl TreasuryContract {
 
         let remaining = balance - amount;
         instance_set(&env, &key, &remaining);
+        token::Client::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &amount,
+        );
 
         emit_commission_paid(&env, &recipient, &token, amount, env.ledger().timestamp());
         emit_action_executed(
@@ -354,11 +366,7 @@ impl TreasuryContract {
     }
 
     /// Inspect quota usage for an actor/resource pair (maintainer diagnostics).
-    pub fn quota_status(
-        env: Env,
-        actor: Address,
-        resource: Symbol,
-    ) -> shared::quota::QuotaStatus {
+    pub fn quota_status(env: Env, actor: Address, resource: Symbol) -> shared::quota::QuotaStatus {
         shared::quota::get_quota_status(&env, &actor, &resource)
     }
 

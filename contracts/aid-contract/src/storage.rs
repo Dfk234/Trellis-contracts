@@ -144,7 +144,7 @@ pub fn append_donor_aid(env: &Env, donor: &Address, aid_id: u64) {
 
 /// Read the full list of aid IDs assigned to `recipient`.
 pub fn get_recipient_aids(env: &Env, recipient: &Address) -> Vec<u64> {
-    persistent_get(env, &DataKey::RecipientAids(recipient.clone()))
+    persistent_get(env, &DataKey::RecipientIndex(recipient.clone()))
         .unwrap_or_else(|| Vec::new(env))
 }
 
@@ -152,7 +152,7 @@ pub fn get_recipient_aids(env: &Env, recipient: &Address) -> Vec<u64> {
 pub fn append_recipient_aid(env: &Env, recipient: &Address, aid_id: u64) {
     let mut ids = get_recipient_aids(env, recipient);
     ids.push_back(aid_id);
-    persistent_set(env, &DataKey::RecipientAids(recipient.clone()), &ids);
+    persistent_set(env, &DataKey::RecipientIndex(recipient.clone()), &ids);
 }
 
 pub fn get_donor_index(env: &Env, donor: &Address) -> Vec<u64> {
