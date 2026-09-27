@@ -33,10 +33,11 @@ mod events;
 mod storage;
 mod types;
 
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Bytes, Env, Symbol};
 
-use shared::events::emit_module_initialized;
 use errors::OracleError;
+use shared::events::emit_module_initialized;
+use shared::{record_action_audit_event, ResourceLink, TimelineEventType};
 use types::{FeedLatest, PriceSubmission};
 
 #[cfg(test)]
@@ -48,8 +49,11 @@ pub struct OracleContract;
 #[contractimpl]
 impl OracleContract {
     /// Initialize the oracle contract with an admin.
-    pub fn initialize(env: Env, admin: Address) {
-        shared::auth::set_admin(&env, &admin);
+    pub fn initialize(env: Env, admin: Address) -> Result<(), OracleError> {
+        shared::auth::initialize_admin(&env, &admin).map_err(|error| match error {
+            shared::Error::AlreadyInitialized => OracleError::AlreadyInitialized,
+            _ => OracleError::Unauthorized,
+        })?;
         emit_module_initialized(
             &env,
             symbol_short!("oracle"),
@@ -57,6 +61,7 @@ impl OracleContract {
             &admin,
             env.ledger().timestamp(),
         );
+        Ok(())
     }
 
     /// Register a new authorized submitter (admin only).
@@ -65,11 +70,27 @@ impl OracleContract {
         caller: Address,
         submitter: Address,
     ) -> Result<(), OracleError> {
-        shared::auth::require_admin(&env, &caller)
-            .map_err(|_| OracleError::Unauthorized)?;
-        caller.require_auth();
-
+        shared::auth::require_admin(&env, &caller).map_err(|_| OracleError::Unauthorized)?;
+        let was_active = storage::is_submitter_active(&env, &submitter);
         storage::register_submitter(&env, submitter.clone(), env.ledger().timestamp())?;
+        record_action_audit_event(
+            &env,
+            &caller,
+            TimelineEventType::RoleChanged,
+            ResourceLink {
+                kind: Bytes::from_slice(&env, b"oracle"),
+                id: 0,
+                revision: 0,
+            },
+            symbol_short!("oracle"),
+            symbol_short!("signer"),
+            symbol_short!("adm_grant"),
+            Some(submitter.clone()),
+            Some(symbol_short!("signer")),
+            Some(if was_active { 1 } else { 0 }),
+            Some(1),
+        )
+        .map_err(|_| OracleError::InternalError)?;
         events::emit_submitter_registered(&env, &submitter, env.ledger().timestamp());
         Ok(())
     }
@@ -80,11 +101,27 @@ impl OracleContract {
         caller: Address,
         submitter: Address,
     ) -> Result<(), OracleError> {
-        shared::auth::require_admin(&env, &caller)
-            .map_err(|_| OracleError::Unauthorized)?;
-        caller.require_auth();
-
+        shared::auth::require_admin(&env, &caller).map_err(|_| OracleError::Unauthorized)?;
+        let was_active = storage::is_submitter_active(&env, &submitter);
         storage::deactivate_submitter(&env, &submitter);
+        record_action_audit_event(
+            &env,
+            &caller,
+            TimelineEventType::RoleChanged,
+            ResourceLink {
+                kind: Bytes::from_slice(&env, b"oracle"),
+                id: 0,
+                revision: 0,
+            },
+            symbol_short!("oracle"),
+            symbol_short!("signer"),
+            symbol_short!("adm_rvok"),
+            Some(submitter.clone()),
+            Some(symbol_short!("signer")),
+            Some(if was_active { 1 } else { 0 }),
+            Some(0),
+        )
+        .map_err(|_| OracleError::InternalError)?;
         events::emit_submitter_deactivated(&env, &submitter, env.ledger().timestamp());
         Ok(())
     }
@@ -188,9 +225,7 @@ impl OracleContract {
         caller: Address,
         seconds: u64,
     ) -> Result<(), OracleError> {
-        shared::auth::require_admin(&env, &caller)
-            .map_err(|_| OracleError::Unauthorized)?;
-        caller.require_auth();
+        shared::auth::require_admin(&env, &caller).map_err(|_| OracleError::Unauthorized)?;
 
         storage::set_staleness_window(&env, seconds);
         events::emit_staleness_window_set(&env, seconds, env.ledger().timestamp());

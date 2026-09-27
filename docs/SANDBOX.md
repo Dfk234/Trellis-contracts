@@ -98,10 +98,21 @@ the result but the path taken — including calls the guards refused
 | `payer_underfunded` | Failure | Insufficient balance mid-workflow |
 | `rpc_rejected_settlement` | Failure | Inclusion timeout (`Error::Expired`) |
 | `invalid_amount_guard` | Failure | Non-positive amount rejected before any side effect |
+| `stale_oracle_quote` | Failure | Old price data rejected before any transfer |
 
 `run_fixture` reports whether the observed result matched the declaration
 (`FixtureOutcome::passed`), so a regression that turns a declared failure into
 a success — or vice versa — is visible.
+
+## Settlement retry and recovery
+
+The highest-risk sandbox journey is funding, obtaining a price quote, and
+settling a payment. If the fake RPC rejects settlement after the in-memory
+token transfer succeeds, the sandbox retains a pending settlement. Call
+`retry_pending_settlement` to retry only the RPC leg; starting another workflow
+while settlement is pending is rejected to prevent a duplicate transfer. A
+successful retry clears the pending state. Retrying after completion returns
+`Error::NotFound`.
 
 ## Local setup
 
@@ -115,6 +126,12 @@ cargo test --manifest-path testing/Cargo.toml sandbox
 # or from inside the crate
 cd testing && cargo test sandbox
 ```
+
+The focused recovery test is
+`cargo test --manifest-path testing/Cargo.toml rpc_timeout_retries_settlement_without_repeating_transfer`.
+The sandbox module suite includes the success path and five deterministic
+failure fixtures: oracle outage, insufficient payer balance, RPC rejection,
+invalid amount, and stale oracle quote.
 
 ## Limitations
 

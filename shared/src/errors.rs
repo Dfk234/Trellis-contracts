@@ -42,6 +42,8 @@ pub enum Error {
     ProposalExpired = 26,
     /// The governance proposal was cancelled by its proposer or super-admin.
     ProposalCancelled = 27,
+    /// Price data is older than the configured freshness window.
+    StaleData = 28,
     /// Attempted to modify an entry that has been marked immutable.
     ImmutableEntry = 16,
     /// The supplied metadata hash is invalid (wrong length or format).

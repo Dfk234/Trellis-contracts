@@ -6,6 +6,7 @@ pub mod canonical;
 pub mod compat;
 pub mod config;
 pub mod errors;
+pub mod error_taxonomy;
 pub mod events;
 pub mod lifecycle;
 pub mod math;
@@ -18,13 +19,17 @@ pub mod timeline;
 pub mod utils;
 
 // Re-export the most commonly-needed items at crate root for ergonomic use.
-pub use auth::{get_admin, require_admin, require_not_paused, set_admin};
+pub use auth::{
+    get_admin, has_permission, initialize_admin, require_admin, require_not_paused,
+    require_permission, role_for_permission, set_admin, Permission, Role,
+};
 pub use batch::{
     batch_invoke_no_args, execute_multi_invoke, execute_multi_transfer, multi_transfer_all,
     BatchConfig, BatchError, BatchMode, BatchResult, BatchTransfer, OperationResult,
     ABSOLUTE_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE,
 };
 pub use errors::Error;
+pub use error_taxonomy::{describe_error, ErrorCategory, ErrorDomain, ErrorInfo};
 pub use migration::{
     begin_migration, clear_journal, dry_run, evaluate_post_checks, expected_step, fail_migration,
     finish_migration, is_resumable, load_journal, mark_step_complete, resume_index, save_journal,
@@ -76,11 +81,11 @@ pub use storage::{
 pub use utils::{is_expired, now};
 
 pub use timeline::{
-    anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry, entry_count,
-    entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq, redact_entry,
-    record_audit_event, timeline_page, viewer_for, AuditEntry, ResourceLink, TimelineEntry,
-    TimelineEventType, TimelineKey, TimelinePage, Viewer, Visibility, DEFAULT_PAGE_SIZE,
-    MAX_PAGE_SIZE, MAX_SCAN_PER_PAGE,
+    action_audit_trail, anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry,
+    entry_count, entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq,
+    record_action_audit_event, record_audit_event, redact_entry, timeline_page, viewer_for,
+    ActionAuditEntry, AuditEntry, ResourceLink, TimelineEntry, TimelineEventType, TimelineKey,
+    TimelinePage, Viewer, Visibility, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_SCAN_PER_PAGE,
 };
 
 pub use canonical::{

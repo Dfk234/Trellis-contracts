@@ -404,6 +404,15 @@ pub struct WorkflowReport {
     pub credential_free: bool,
 }
 
+#[derive(Clone, Debug)]
+struct PendingSettlement {
+    payer: Address,
+    payee: Address,
+    amount: i128,
+    fee: i128,
+    oracle_price: i128,
+}
+
 /// A sandboxed environment: validated config plus fake external services.
 pub struct Sandbox {
     config: SandboxConfig,
@@ -412,6 +421,7 @@ pub struct Sandbox {
     token: FakeTokenAdapter,
     rpc: FakeRpcAdapter,
     calls: Vec<AdapterCall>,
+    pending_settlement: Option<PendingSettlement>,
 }
 
 impl Sandbox {
@@ -429,6 +439,7 @@ impl Sandbox {
                 config.simulated_latency_ledgers,
             ),
             calls: Vec::new(env),
+            pending_settlement: None,
             rng,
             config,
         })
@@ -483,6 +494,10 @@ impl Sandbox {
 
     pub fn calls(&self) -> &Vec<AdapterCall> {
         &self.calls
+    }
+
+    pub fn has_pending_settlement(&self) -> bool {
+        self.pending_settlement.is_some()
     }
 
     /// Refuse key material. Sandbox tests must not need real credentials.
@@ -545,9 +560,17 @@ impl Sandbox {
             self.record_call(&symbol_short!("token"), &symbol_short!("amt"), false);
             return Err(Error::InvalidAmount);
         }
+        if self.pending_settlement.is_some() {
+            self.record_call(&symbol_short!("pending"), &symbol_short!("wf"), false);
+            return Err(Error::InvalidTransition);
+        }
 
         let quote = match self.oracle.quote(env, oracle_asset) {
             Ok(quote) => {
+                if quote.stale {
+                    self.record_call(&symbol_short!("oracle"), &symbol_short!("quote"), false);
+                    return Err(Error::StaleData);
+                }
                 self.record_call(&symbol_short!("oracle"), &symbol_short!("quote"), true);
                 quote
             }
@@ -565,6 +588,27 @@ impl Sandbox {
         }
         self.record_call(&symbol_short!("token"), &symbol_short!("xfer"), true);
 
+        self.pending_settlement = Some(PendingSettlement {
+            payer: payer.clone(),
+            payee: payee.clone(),
+            amount,
+            fee,
+            oracle_price: quote.price,
+        });
+        self.submit_pending_settlement()
+    }
+
+    /// Retry only the RPC leg of a workflow whose token transfer already
+    /// succeeded. This prevents recovery from paying the recipient twice.
+    pub fn retry_pending_settlement(&mut self) -> Result<WorkflowReport, Error> {
+        if self.pending_settlement.is_none() {
+            return Err(Error::NotFound);
+        }
+        self.submit_pending_settlement()
+    }
+
+    fn submit_pending_settlement(&mut self) -> Result<WorkflowReport, Error> {
+        let pending = self.pending_settlement.clone().ok_or(Error::NotFound)?;
         let settled = match self.rpc.submit(&symbol_short!("settle")) {
             Ok(ledger) => {
                 self.record_call(&symbol_short!("rpc"), &symbol_short!("settle"), true);
@@ -575,7 +619,7 @@ impl Sandbox {
                 return Err(err);
             }
         };
-
+        self.pending_settlement = None;
         // Seeded jitter makes the confirmation ledger vary per run without
         // making it unpredictable.
         let jitter = self
@@ -583,11 +627,11 @@ impl Sandbox {
             .next_i128(0, self.config.simulated_latency_ledgers as i128 + 1);
         Ok(WorkflowReport {
             steps: 4,
-            amount,
-            fee,
-            oracle_price: quote.price,
-            payer_balance: self.token.balance_of(payer),
-            payee_balance: self.token.balance_of(payee),
+            amount: pending.amount,
+            fee: pending.fee,
+            oracle_price: pending.oracle_price,
+            payer_balance: self.token.balance_of(&pending.payer),
+            payee_balance: self.token.balance_of(&pending.payee),
             settled_ledger: settled.saturating_add(jitter as u32),
             credential_free: self.config.forbid_production_credentials,
         })
@@ -633,6 +677,8 @@ pub struct ScenarioFixture {
     pub oracle_price: i128,
     /// When `true` the oracle fails for the traded asset.
     pub oracle_failure: bool,
+    /// When `true` the oracle returns an old quote that must be rejected.
+    pub oracle_stale: bool,
     /// Amount routed through the workflow.
     pub amount: i128,
     /// Payer funding; `0` means "fund exactly `amount`".
@@ -671,8 +717,8 @@ pub struct FixtureOutcome {
 
 /// Success and failure scenarios every contributor can run locally.
 ///
-/// Covers: a clean settlement, an oracle outage, an underfunded payer, an RPC
-/// rejection, and an invalid amount.
+/// Covers: a clean settlement, an oracle outage or stale quote, an underfunded
+/// payer, an RPC rejection, and an invalid amount.
 pub fn standard_fixtures(env: &Env) -> Vec<ScenarioFixture> {
     let mut fixtures = Vec::new(env);
 
@@ -681,6 +727,7 @@ pub fn standard_fixtures(env: &Env) -> Vec<ScenarioFixture> {
         expectation: ScenarioExpectation::Success,
         oracle_price: 1_000_000,
         oracle_failure: false,
+        oracle_stale: false,
         amount: 10_000,
         funding: 0,
         rpc_failure: false,
@@ -690,6 +737,7 @@ pub fn standard_fixtures(env: &Env) -> Vec<ScenarioFixture> {
         expectation: ScenarioExpectation::Failure,
         oracle_price: 1_000_000,
         oracle_failure: true,
+        oracle_stale: false,
         amount: 10_000,
         funding: 0,
         rpc_failure: false,
@@ -699,6 +747,7 @@ pub fn standard_fixtures(env: &Env) -> Vec<ScenarioFixture> {
         expectation: ScenarioExpectation::Failure,
         oracle_price: 1_000_000,
         oracle_failure: false,
+        oracle_stale: false,
         amount: 10_000,
         funding: 5_000,
         rpc_failure: false,
@@ -708,6 +757,7 @@ pub fn standard_fixtures(env: &Env) -> Vec<ScenarioFixture> {
         expectation: ScenarioExpectation::Failure,
         oracle_price: 1_000_000,
         oracle_failure: false,
+        oracle_stale: false,
         amount: 10_000,
         funding: 0,
         rpc_failure: true,
@@ -717,8 +767,19 @@ pub fn standard_fixtures(env: &Env) -> Vec<ScenarioFixture> {
         expectation: ScenarioExpectation::Failure,
         oracle_price: 1_000_000,
         oracle_failure: false,
+        oracle_stale: false,
         amount: 0,
         funding: 1,
+        rpc_failure: false,
+    });
+    fixtures.push_back(ScenarioFixture {
+        name: Symbol::new(env, "stale_oracle_quote"),
+        expectation: ScenarioExpectation::Failure,
+        oracle_price: 1_000_000,
+        oracle_failure: false,
+        oracle_stale: true,
+        amount: 10_000,
+        funding: 0,
         rpc_failure: false,
     });
 
@@ -785,6 +846,9 @@ fn run_fixture_inner(
         sandbox
             .oracle_mut()
             .set_price(&asset, fixture.oracle_price)?;
+        if fixture.oracle_stale {
+            sandbox.oracle_mut().mark_stale(&asset);
+        }
     }
     sandbox.rpc_mut().set_fail_next(fixture.rpc_failure);
     sandbox.token_mut().mint(&payer, fixture.funding_amount())?;
@@ -803,6 +867,7 @@ mod tests {
             expectation: ScenarioExpectation::Success,
             oracle_price: 2_500_000,
             oracle_failure: false,
+            oracle_stale: false,
             amount: 100_000,
             funding: 100_000,
             rpc_failure: false,
@@ -1049,6 +1114,70 @@ mod tests {
     }
 
     #[test]
+    fn stale_oracle_quotes_are_rejected_before_transfer() {
+        let env = Env::default();
+        let mut sandbox = Sandbox::new(&env, SandboxConfig::new(42)).unwrap();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let asset = Symbol::new(&env, "sandbox_asset");
+        sandbox.oracle_mut().set_price(&asset, 1_000_000).unwrap();
+        sandbox.oracle_mut().mark_stale(&asset);
+        sandbox.token_mut().mint(&payer, 100_000).unwrap();
+
+        assert_eq!(
+            sandbox.run_primary_workflow(&env, &payer, &payee, &asset, 100_000),
+            Err(Error::StaleData)
+        );
+        assert_eq!(sandbox.token().balance_of(&payer), 100_000);
+        assert_eq!(sandbox.token().balance_of(&payee), 0);
+        assert_eq!(sandbox.token().transfers(), 0);
+        assert_eq!(sandbox.rpc().submitted_count(), 0);
+        assert!(!sandbox.has_pending_settlement());
+    }
+
+    #[test]
+    fn rpc_timeout_retries_settlement_without_repeating_transfer() {
+        let env = Env::default();
+        let mut sandbox = Sandbox::new(&env, SandboxConfig::new(42)).unwrap();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let asset = Symbol::new(&env, "sandbox_asset");
+        sandbox.oracle_mut().set_price(&asset, 1_000_000).unwrap();
+        sandbox.token_mut().mint(&payer, 100_000).unwrap();
+        sandbox.rpc_mut().set_fail_next(true);
+
+        assert_eq!(
+            sandbox.run_primary_workflow(&env, &payer, &payee, &asset, 100_000),
+            Err(Error::Expired)
+        );
+        assert!(sandbox.has_pending_settlement());
+        assert_eq!(sandbox.token().transfers(), 1);
+        assert_eq!(sandbox.token().balance_of(&payer), 500);
+        assert_eq!(sandbox.token().balance_of(&payee), 99_500);
+        assert_eq!(sandbox.rpc().submitted_count(), 0);
+
+        assert_eq!(
+            sandbox.run_primary_workflow(&env, &payer, &payee, &asset, 100_000),
+            Err(Error::InvalidTransition)
+        );
+        assert_eq!(sandbox.token().transfers(), 1);
+
+        sandbox.rpc_mut().set_fail_next(true);
+        assert_eq!(sandbox.retry_pending_settlement(), Err(Error::Expired));
+        assert!(sandbox.has_pending_settlement());
+        assert_eq!(sandbox.token().transfers(), 1);
+
+        let report = sandbox.retry_pending_settlement().unwrap();
+        assert_eq!(report.amount, 100_000);
+        assert_eq!(report.fee, 500);
+        assert_eq!(report.payee_balance, 99_500);
+        assert!(!sandbox.has_pending_settlement());
+        assert_eq!(sandbox.token().transfers(), 1);
+        assert_eq!(sandbox.rpc().submitted_count(), 1);
+        assert_eq!(sandbox.retry_pending_settlement(), Err(Error::NotFound));
+    }
+
+    #[test]
     fn fee_estimate_rejects_overflow() {
         assert_eq!(estimate_fee(100_000), Ok(500));
         assert_eq!(estimate_fee(i128::MAX), Err(Error::Overflow));
@@ -1060,7 +1189,7 @@ mod tests {
     fn standard_fixtures_cover_success_and_failure() {
         let env = Env::default();
         let fixtures = standard_fixtures(&env);
-        assert_eq!(fixtures.len(), 5);
+        assert_eq!(fixtures.len(), 6);
         let mut successes = 0;
         let mut failures = 0;
         for i in 0..fixtures.len() {
@@ -1072,17 +1201,21 @@ mod tests {
             }
         }
         assert_eq!(successes, 1);
-        assert_eq!(failures, 4);
+        assert_eq!(failures, 5);
     }
 
     #[test]
     fn every_standard_fixture_matches_its_expectation() {
         let env = Env::default();
         let outcomes = run_all_fixtures(&env);
-        assert_eq!(outcomes.len(), 5);
+        assert_eq!(outcomes.len(), 6);
         for i in 0..outcomes.len() {
             let outcome = outcomes.get(i).unwrap();
-            assert!(outcome.passed, "fixture did not match expectation");
+            assert!(
+                outcome.passed,
+                "fixture {:?} expected_failure={} failed={} error_code={}",
+                outcome.name, outcome.expected_failure, outcome.failed, outcome.error_code
+            );
             assert_eq!(outcome.failed, outcome.expected_failure);
         }
     }

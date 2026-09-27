@@ -15,9 +15,10 @@
 //! * Off-chain read helpers for enumerating role members and querying role
 //!   ancestry.
 
+use shared::TimelineEventType;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Map, Symbol,
-    Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map,
+    Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -50,6 +51,8 @@ pub enum AccessControlError {
     InvitationExpired = 210,
     RoleEscalation = 211,
     RateLimitExceeded = 212,
+    AlreadyInitialized = 213,
+    AuditFailed = 214,
 }
 
 type ContractResult<T> = core::result::Result<T, AccessControlError>;
@@ -119,7 +122,14 @@ impl AccessControlContract {
     ///
     /// The `super_admin` role is the root of the hierarchy and cannot be
     /// revoked from the super-admin address.
-    pub fn initialize(env: Env, super_admin: Address) {
+    pub fn initialize(env: Env, super_admin: Address) -> Result<(), AccessControlError> {
+        if env.storage().instance().has(&DataKey::SuperAdmin) {
+            return Err(AccessControlError::AlreadyInitialized);
+        }
+        shared::auth::initialize_admin(&env, &super_admin).map_err(|error| match error {
+            shared::Error::AlreadyInitialized => AccessControlError::AlreadyInitialized,
+            _ => AccessControlError::NotAdmin,
+        })?;
         // Store the super-admin address.
         env.storage()
             .instance()
@@ -133,10 +143,22 @@ impl AccessControlContract {
         // Register the `super_admin` role and grant it.
         register_role_internal(&env, &symbol_short!("super"));
         grant_role_internal(&env, &symbol_short!("super"), &super_admin);
+        record_access_audit(
+            &env,
+            &super_admin,
+            TimelineEventType::ConfigChanged,
+            symbol_short!("init"),
+            symbol_short!("setup"),
+            None,
+            Some(symbol_short!("super")),
+            None,
+            Some(1),
+        )?;
 
         // Emit: role created for super_admin.
         env.events()
             .publish((EV_ROLE_CREATED,), (symbol_short!("super"), super_admin));
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -161,6 +183,15 @@ impl AccessControlContract {
             .expect("contract not initialised")
     }
 
+    /// Returns structured role and administration audit records for maintainers.
+    pub fn audit_trail(
+        env: Env,
+        maintainer: Address,
+        limit: u32,
+    ) -> Result<Vec<shared::ActionAuditEntry>, shared::Error> {
+        shared::timeline::action_audit_trail(&env, &maintainer, limit)
+    }
+
     /// Add a new admin.  Only existing admins may call this.
     pub fn add_admin(
         env: Env,
@@ -177,12 +208,45 @@ impl AccessControlContract {
             .unwrap_or_else(|| Map::new(&env));
 
         if admins.get(new_admin.clone()).unwrap_or(false) {
-            // Already an admin — idempotent success.
+            if !shared::auth::has_role(&env, &new_admin, shared::auth::Role::Admin) {
+                shared::storage::persistent_set(
+                    &env,
+                    &shared::auth::DataKey::Role(new_admin.clone(), shared::auth::Role::Admin),
+                    &true,
+                );
+                record_access_audit(
+                    &env,
+                    &caller,
+                    TimelineEventType::RoleChanged,
+                    symbol_short!("admin_add"),
+                    symbol_short!("role_sync"),
+                    Some(new_admin.clone()),
+                    Some(symbol_short!("admin")),
+                    Some(0),
+                    Some(1),
+                )?;
+            }
             return Ok(());
         }
 
         admins.set(new_admin.clone(), true);
         env.storage().instance().set(&DataKey::Admins, &admins);
+        shared::storage::persistent_set(
+            &env,
+            &shared::auth::DataKey::Role(new_admin.clone(), shared::auth::Role::Admin),
+            &true,
+        );
+        record_access_audit(
+            &env,
+            &caller,
+            TimelineEventType::RoleChanged,
+            symbol_short!("admin_add"),
+            symbol_short!("adm_grant"),
+            Some(new_admin.clone()),
+            Some(symbol_short!("admin")),
+            Some(0),
+            Some(1),
+        )?;
 
         env.events().publish((EV_ADMIN_ADDED,), (caller, new_admin));
         Ok(())
@@ -221,6 +285,21 @@ impl AccessControlContract {
 
         admins.set(target.clone(), false);
         env.storage().instance().set(&DataKey::Admins, &admins);
+        shared::storage::persistent_remove(
+            &env,
+            &shared::auth::DataKey::Role(target.clone(), shared::auth::Role::Admin),
+        );
+        record_access_audit(
+            &env,
+            &caller,
+            TimelineEventType::RoleChanged,
+            symbol_short!("admin_rmv"),
+            symbol_short!("adm_rvok"),
+            Some(target.clone()),
+            Some(symbol_short!("admin")),
+            Some(1),
+            Some(0),
+        )?;
 
         env.events().publish((EV_ADMIN_REMOVED,), (caller, target));
         Ok(())
@@ -242,6 +321,17 @@ impl AccessControlContract {
         }
 
         register_role_internal(&env, &role);
+        record_access_audit(
+            &env,
+            &caller,
+            TimelineEventType::ConfigChanged,
+            symbol_short!("role_new"),
+            symbol_short!("admin_cfg"),
+            None,
+            Some(role.clone()),
+            Some(0),
+            Some(1),
+        )?;
 
         env.events().publish((EV_ROLE_CREATED,), (role, caller));
         Ok(())
@@ -282,9 +372,24 @@ impl AccessControlContract {
             return Err(AccessControlError::CycleDetected);
         }
 
+        let had_parent = env
+            .storage()
+            .instance()
+            .has(&DataKey::RoleParent(role.clone()));
         env.storage()
             .instance()
             .set(&DataKey::RoleParent(role.clone()), &parent);
+        record_access_audit(
+            &env,
+            &caller,
+            TimelineEventType::ConfigChanged,
+            symbol_short!("role_par"),
+            symbol_short!("admin_cfg"),
+            None,
+            Some(role.clone()),
+            Some(if had_parent { 1 } else { 0 }),
+            Some(1),
+        )?;
 
         env.events()
             .publish((EV_ROLE_PARENT_SET,), (role, parent, caller));
@@ -312,7 +417,19 @@ impl AccessControlContract {
 
         ensure_role_exists(&env, &role)?;
 
+        let was_member = has_direct_role(&env, &role, &user);
         grant_role_internal(&env, &role, &user);
+        record_access_audit(
+            &env,
+            &caller,
+            TimelineEventType::RoleChanged,
+            symbol_short!("role_grt"),
+            symbol_short!("adm_grant"),
+            Some(user.clone()),
+            Some(role.clone()),
+            Some(if was_member { 1 } else { 0 }),
+            Some(1),
+        )?;
 
         env.events()
             .publish((EV_ROLE_GRANTED,), (role, user, caller));
@@ -332,7 +449,19 @@ impl AccessControlContract {
 
         ensure_role_exists(&env, &role)?;
 
+        let was_member = has_direct_role(&env, &role, &user);
         revoke_role_internal(&env, &role, &user);
+        record_access_audit(
+            &env,
+            &caller,
+            TimelineEventType::RoleChanged,
+            symbol_short!("role_rvk"),
+            symbol_short!("adm_rvok"),
+            Some(user.clone()),
+            Some(role.clone()),
+            Some(if was_member { 1 } else { 0 }),
+            Some(0),
+        )?;
 
         env.events()
             .publish((EV_ROLE_REVOKED,), (role, user, caller));
@@ -394,7 +523,20 @@ impl AccessControlContract {
             expires_at,
         };
         
-        env.storage().instance().set(&DataKey::Invitation(invitee.clone(), role.clone()), &inv);
+        let invitation_key = DataKey::Invitation(invitee.clone(), role.clone());
+        let invitation_exists = env.storage().instance().has(&invitation_key);
+        env.storage().instance().set(&invitation_key, &inv);
+        record_access_audit(
+            &env,
+            &caller,
+            TimelineEventType::RoleChanged,
+            symbol_short!("invite"),
+            symbol_short!("create"),
+            Some(invitee.clone()),
+            Some(role.clone()),
+            Some(if invitation_exists { 1 } else { 0 }),
+            Some(1),
+        )?;
         env.events().publish((EV_INVITE_CREATED,), (caller, invitee, role));
         Ok(())
     }
@@ -415,8 +557,20 @@ impl AccessControlContract {
                 return Err(AccessControlError::InvitationExpired);
             }
             
+            let was_member = has_direct_role(&env, &role, &caller);
             grant_role_internal(&env, &role, &caller);
             env.storage().instance().remove(&key);
+            record_access_audit(
+                &env,
+                &caller,
+                TimelineEventType::RoleChanged,
+                symbol_short!("invite"),
+                symbol_short!("accept"),
+                Some(caller.clone()),
+                Some(role.clone()),
+                Some(if was_member { 1 } else { 0 }),
+                Some(1),
+            )?;
             
             env.events().publish((EV_INVITE_ACCEPTED,), (caller.clone(), role.clone()));
             Ok(())
@@ -442,6 +596,17 @@ impl AccessControlContract {
             }
             
             env.storage().instance().remove(&key);
+            record_access_audit(
+                &env,
+                &caller,
+                TimelineEventType::RoleChanged,
+                symbol_short!("invite"),
+                symbol_short!("revoke"),
+                Some(invitee.clone()),
+                Some(role.clone()),
+                Some(1),
+                Some(0),
+            )?;
             env.events().publish((EV_INVITE_REVOKED,), (caller, invitee, role));
             Ok(())
         } else {
@@ -572,6 +737,15 @@ fn grant_role_internal(env: &Env, role: &Symbol, user: &Address) {
         .set(&DataKey::RoleMembers(role.clone()), &members);
 }
 
+fn has_direct_role(env: &Env, role: &Symbol, user: &Address) -> bool {
+    let members: Map<Address, bool> = env
+        .storage()
+        .instance()
+        .get(&DataKey::RoleMembers(role.clone()))
+        .unwrap_or_else(|| Map::new(env));
+    members.get(user.clone()).unwrap_or(false)
+}
+
 /// Revoke `role` from `user` — sets membership to false (soft-delete).
 fn revoke_role_internal(env: &Env, role: &Symbol, user: &Address) {
     let mut members: Map<Address, bool> = env
@@ -654,6 +828,38 @@ fn require_admin(env: &Env, caller: &Address) -> ContractResult<()> {
     }
 }
 
+fn record_access_audit(
+    env: &Env,
+    actor: &Address,
+    event_type: shared::TimelineEventType,
+    action: Symbol,
+    reason: Symbol,
+    resource: Option<Address>,
+    attribute: Option<Symbol>,
+    before: Option<i128>,
+    after: Option<i128>,
+) -> ContractResult<()> {
+    shared::record_action_audit_event(
+        env,
+        actor,
+        event_type,
+        shared::ResourceLink {
+            kind: Bytes::from_slice(env, b"access"),
+            id: 0,
+            revision: 0,
+        },
+        symbol_short!("access"),
+        action,
+        reason,
+        resource,
+        attribute,
+        before,
+        after,
+    )
+    .map(|_| ())
+    .map_err(|_| AccessControlError::AuditFailed)
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -686,6 +892,42 @@ mod tests {
 
     fn client_for<'a>(env: &'a Env, contract_id: &Address) -> AccessControlContractClient<'a> {
         AccessControlContractClient::new(env, contract_id)
+    }
+
+    #[test]
+    fn initialization_requires_authentication_and_is_one_time() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, AccessControlContract);
+        let client = AccessControlContractClient::new(&env, &contract_id);
+        let super_admin = Address::generate(&env);
+
+        assert!(client.try_initialize(&super_admin).is_err());
+        env.mock_all_auths();
+        client.initialize(&super_admin);
+        assert_eq!(
+            client.try_initialize(&super_admin),
+            Err(Ok(AccessControlError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
+    fn role_changes_are_queryable_with_actor_and_state_context() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let role = symbol_short!("audited");
+        let user = Address::generate(&env);
+
+        client.create_role(&super_admin, &role);
+        client.grant_role(&super_admin, &role, &user);
+
+        let audit = client.audit_trail(&super_admin, &10).unwrap();
+        assert_eq!(audit.get(0).unwrap().actor, super_admin);
+        assert_eq!(audit.get(0).unwrap().scope, symbol_short!("access"));
+        assert_eq!(audit.get(0).unwrap().action, symbol_short!("role_grt"));
+        assert_eq!(audit.get(0).unwrap().resource, Some(user));
+        assert_eq!(audit.get(0).unwrap().attribute, Some(role));
+        assert_eq!(audit.get(0).unwrap().before, Some(0));
+        assert_eq!(audit.get(0).unwrap().after, Some(1));
     }
 
     // -----------------------------------------------------------------------

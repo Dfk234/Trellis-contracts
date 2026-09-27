@@ -157,7 +157,7 @@ impl GovernanceContract {
             return Err(Error::InvalidArgument);
         }
 
-        shared::auth::set_admin(&env, &admin);
+        shared::auth::initialize_admin(&env, &admin)?;
         // Grant the Admin role to every address in the admin set so they
         // can propose, approve, and execute.
         let mut i: u32 = 0;
@@ -511,17 +511,13 @@ impl GovernanceContract {
 
 /// Requires the caller to hold the `Admin` role.
 fn require_admin_role(env: &Env, caller: &Address) -> ContractResult<()> {
-    auth::require_role(env, caller, Role::Admin)
+    auth::require_permission(env, caller, shared::auth::Permission::ManageRoles)
 }
 
 /// Requires the caller to be the admin (for backward-compatible parameter
 /// management).
 fn require_governance(env: &Env, caller: &Address) -> ContractResult<()> {
-    if *caller != shared::auth::get_admin(env) {
-        return Err(Error::Unauthorized);
-    }
-    caller.require_auth();
-    Ok(())
+    auth::require_permission(env, caller, shared::auth::Permission::ManageConfiguration)
 }
 
 fn seed_defaults(env: &Env) {

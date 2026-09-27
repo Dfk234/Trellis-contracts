@@ -157,6 +157,32 @@ fn claim_while_paused_is_rejected() {
 }
 
 #[test]
+fn pauser_permission_can_be_granted_and_revoked() {
+    let fx = setup();
+    let client = AidContractClient::new(&fx.env, &fx.contract_id);
+    let pauser = Address::generate(&fx.env);
+
+    assert_eq!(
+        client.try_set_pauser(&fx.donor, &pauser, &true),
+        Err(Ok(SharedError::Unauthorized))
+    );
+    client.set_pauser(&fx.admin, &pauser, &true);
+    client.set_paused(&pauser, &true);
+    let paused = fx.env.as_contract(&fx.contract_id, || {
+        fx.env
+            .storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(&fx.env, "paused"))
+            .unwrap_or(false)
+    });
+    assert!(paused);
+
+    client.set_paused(&fx.admin, &false);
+    client.set_pauser(&fx.admin, &pauser, &false);
+    assert!(client.try_set_paused(&pauser, &true).is_err());
+}
+
+#[test]
 fn create_aid_rejects_non_positive_amount_and_past_expiry() {
     let fx = setup();
     let client = AidContractClient::new(&fx.env, &fx.contract_id);

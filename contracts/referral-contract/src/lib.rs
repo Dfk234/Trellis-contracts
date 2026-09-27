@@ -40,7 +40,7 @@
 //! For full API details, see the module items below.
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, vec, Address, Env, IntoVal, Symbol,
+    contract, contractimpl, contracttype, symbol_short, vec, Address, Bytes, Env, IntoVal, Symbol,
 };
 
 use shared::errors::Error;
@@ -124,8 +124,9 @@ pub struct ReferralContract;
 #[contractimpl]
 impl ReferralContract {
     /// Initialise the contract, setting the admin address.
-    pub fn initialize(env: Env, admin: Address) {
-        shared::auth::set_admin(&env, &admin);
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        shared::auth::initialize_admin(&env, &admin)?;
+        shared::auth::grant_role(&env, &admin, &admin, shared::auth::Role::ReferralManager)?;
         env.storage().instance().set(&DataKey::MaxTiers, &1_u32);
         env.storage().instance().set(&DataKey::RewardCap, &0_i128);
         env.storage().instance().set(&DataKey::TierBps(1), &0_i128);
@@ -136,6 +137,7 @@ impl ReferralContract {
             &admin,
             env.ledger().timestamp(),
         );
+        Ok(())
     }
 
     /// Configure the treasury contract used for referral reward claims.
@@ -162,6 +164,58 @@ impl ReferralContract {
     pub fn set_registry(env: Env, caller: Address, registry: Address) -> Result<(), Error> {
         require_admin(&env, &caller)?;
         env.storage().instance().set(&DataKey::Registry, &registry);
+        Ok(())
+    }
+
+    /// Grant or revoke referral configuration access. Admin only.
+    pub fn set_referral_manager(
+        env: Env,
+        caller: Address,
+        manager: Address,
+        enabled: bool,
+    ) -> Result<(), Error> {
+        shared::auth::require_admin(&env, &caller)?;
+        let was_manager =
+            shared::auth::has_role(&env, &manager, shared::auth::Role::ReferralManager);
+        if enabled {
+            shared::auth::grant_role(&env, &caller, &manager, shared::auth::Role::ReferralManager)?;
+        } else {
+            shared::auth::revoke_role(
+                &env,
+                &caller,
+                &manager,
+                shared::auth::Role::ReferralManager,
+            )?;
+        }
+        shared::record_action_audit_event(
+            &env,
+            &caller,
+            shared::TimelineEventType::RoleChanged,
+            shared::ResourceLink {
+                kind: Bytes::from_slice(&env, b"referral"),
+                id: 0,
+                revision: 0,
+            },
+            symbol_short!("referral"),
+            symbol_short!("ref_mgr"),
+            if enabled {
+                symbol_short!("adm_grant")
+            } else {
+                symbol_short!("adm_rvok")
+            },
+            Some(manager.clone()),
+            Some(symbol_short!("ref_mgr")),
+            Some(if was_manager { 1 } else { 0 }),
+            Some(if enabled { 1 } else { 0 }),
+        )?;
+        emit_permission_changed(
+            &env,
+            symbol_short!("referral"),
+            symbol_short!("ref_mgr"),
+            &manager,
+            enabled,
+            env.ledger().timestamp(),
+        );
         Ok(())
     }
 
@@ -435,11 +489,7 @@ impl ReferralContract {
 }
 
 fn require_admin(env: &Env, caller: &Address) -> ContractResult<()> {
-    if *caller != shared::auth::get_admin(env) {
-        return Err(Error::Unauthorized);
-    }
-    caller.require_auth();
-    Ok(())
+    shared::auth::require_permission(env, caller, shared::auth::Permission::ReferralConfiguration)
 }
 
 fn validate_tier_config(
@@ -806,6 +856,24 @@ mod tests {
             tier_three,
             tier_four,
         )
+    }
+
+    #[test]
+    fn referral_manager_permission_is_enforced_and_revocable() {
+        let (env, referral_id, admin, ..) = setup();
+        let referral = ReferralContractClient::new(&env, &referral_id);
+        let manager = Address::generate(&env);
+        let treasury = Address::generate(&env);
+
+        referral.set_referral_manager(&admin, &manager, &true);
+        referral.set_treasury(&manager, &treasury);
+        assert_eq!(referral.get_treasury().unwrap(), treasury);
+
+        referral.set_referral_manager(&admin, &manager, &false);
+        assert_eq!(
+            referral.try_set_treasury(&manager, &Address::generate(&env)),
+            Err(Ok(Error::Unauthorized))
+        );
     }
 
     #[test]

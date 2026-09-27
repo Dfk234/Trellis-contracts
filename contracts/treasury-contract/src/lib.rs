@@ -29,15 +29,16 @@
 //! - [`TreasuryContract::withdrawal_limit`]: View the max per-transaction limit
 //! - [`TreasuryContract::referral_contract`]: See the registered referral contract
 
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Bytes, Env, Symbol};
 
-use shared::auth::{self, Role};
+use shared::auth::{self, Permission, Role};
 use shared::errors::Error;
 use shared::events::{
     self, emit_action_executed, emit_commission_paid, emit_module_initialized,
     emit_permission_changed, emit_treasury_deposit, emit_treasury_withdrawal,
 };
 use shared::storage::{instance_get, instance_set, persistent_set};
+use shared::{record_action_audit_event, ResourceLink, TimelineEventType};
 
 /// Storage key prefix for per-category multi-token balances; the full key is
 /// `(BALANCE, token, category)`.
@@ -53,6 +54,37 @@ const REWARDS_CATEGORY: Symbol = symbol_short!("rewards");
 /// `distribute_reward`.
 const REFERRAL_CONTRACT: Symbol = symbol_short!("ref_ctr");
 
+fn record_treasury_audit(
+    env: &Env,
+    actor: &Address,
+    event_type: TimelineEventType,
+    action: Symbol,
+    reason: Symbol,
+    resource: Option<Address>,
+    attribute: Option<Symbol>,
+    before: Option<i128>,
+    after: Option<i128>,
+) -> Result<(), Error> {
+    record_action_audit_event(
+        env,
+        actor,
+        event_type,
+        ResourceLink {
+            kind: Bytes::from_slice(env, b"treasury"),
+            id: 0,
+            revision: 0,
+        },
+        symbol_short!("treasury"),
+        action,
+        reason,
+        resource,
+        attribute,
+        before,
+        after,
+    )?;
+    Ok(())
+}
+
 #[contract]
 pub struct TreasuryContract;
 
@@ -65,13 +97,24 @@ impl TreasuryContract {
         if max_withdrawal_limit <= 0 {
             return Err(Error::InvalidArgument);
         }
-        auth::set_admin(&env, &admin);
+        auth::initialize_admin(&env, &admin)?;
         persistent_set(
             &env,
             &shared::auth::DataKey::Role(admin.clone(), Role::TreasuryManager),
             &true,
         );
         instance_set(&env, &MAX_WD, &max_withdrawal_limit);
+        record_treasury_audit(
+            &env,
+            &admin,
+            TimelineEventType::ConfigChanged,
+            symbol_short!("init"),
+            symbol_short!("setup"),
+            None,
+            None,
+            None,
+            Some(max_withdrawal_limit),
+        )?;
         emit_module_initialized(
             &env,
             symbol_short!("treasury"),
@@ -84,7 +127,19 @@ impl TreasuryContract {
 
     /// Grants the `TreasuryManager` role to `who`. Admin only.
     pub fn add_treasury_manager(env: Env, caller: Address, who: Address) -> Result<(), Error> {
+        let was_manager = auth::has_role(&env, &who, Role::TreasuryManager);
         auth::grant_role(&env, &caller, &who, Role::TreasuryManager)?;
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::RoleChanged,
+            symbol_short!("mgr_grnt"),
+            symbol_short!("adm_grant"),
+            Some(who.clone()),
+            Some(symbol_short!("manager")),
+            Some(if was_manager { 1 } else { 0 }),
+            Some(1),
+        )?;
         emit_permission_changed(
             &env,
             symbol_short!("treasury"),
@@ -98,7 +153,19 @@ impl TreasuryContract {
 
     /// Revokes the `TreasuryManager` role from `who`. Admin only.
     pub fn remove_treasury_manager(env: Env, caller: Address, who: Address) -> Result<(), Error> {
+        let was_manager = auth::has_role(&env, &who, Role::TreasuryManager);
         auth::revoke_role(&env, &caller, &who, Role::TreasuryManager)?;
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::RoleChanged,
+            symbol_short!("mgr_rvok"),
+            symbol_short!("adm_rvok"),
+            Some(who.clone()),
+            Some(symbol_short!("manager")),
+            Some(if was_manager { 1 } else { 0 }),
+            Some(0),
+        )?;
         emit_permission_changed(
             &env,
             symbol_short!("treasury"),
@@ -116,7 +183,19 @@ impl TreasuryContract {
         if new_limit <= 0 {
             return Err(Error::InvalidArgument);
         }
+        let previous = instance_get::<_, i128>(&env, &MAX_WD).unwrap_or(0);
         instance_set(&env, &MAX_WD, &new_limit);
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::ConfigChanged,
+            symbol_short!("wd_limit"),
+            symbol_short!("admin_cfg"),
+            None,
+            None,
+            Some(previous),
+            Some(new_limit),
+        )?;
         emit_action_executed(
             &env,
             symbol_short!("treasury"),
@@ -140,11 +219,22 @@ impl TreasuryContract {
         if amount <= 0 {
             return Err(Error::InvalidArgument);
         }
-        auth::require_role(&env, &caller, Role::TreasuryManager)?;
+        auth::require_permission(&env, &caller, Permission::TreasuryOperations)?;
         let key = (BALANCE, token.clone(), category.clone());
         let balance: i128 = env.storage().instance().get(&key).unwrap_or(0);
         let new_balance = balance.checked_add(amount).ok_or(Error::Overflow)?;
         env.storage().instance().set(&key, &new_balance);
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::RecordUpdated,
+            symbol_short!("deposit"),
+            symbol_short!("funds_in"),
+            Some(token.clone()),
+            Some(category.clone()),
+            Some(balance),
+            Some(new_balance),
+        )?;
         emit_treasury_deposit(&env, category, &caller, &token, amount, new_balance);
         emit_action_executed(
             &env,
@@ -202,13 +292,24 @@ impl TreasuryContract {
         }
 
         // Auth check last
-        auth::require_role(&env, &caller, Role::TreasuryManager)?;
+        auth::require_permission(&env, &caller, Permission::TreasuryOperations)?;
 
         // Quota enforcement: fail-open when unconfigured.
         shared::quota::check_and_consume(&env, &caller, &symbol_short!("wdraw"), amount)?;
 
         let remaining = balance - amount;
         instance_set(&env, &key, &remaining);
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::PaymentSent,
+            symbol_short!("withdraw"),
+            symbol_short!("funds_out"),
+            Some(token.clone()),
+            Some(category.clone()),
+            Some(balance),
+            Some(remaining),
+        )?;
 
         emit_treasury_withdrawal(&env, category, &to, &token, amount, remaining);
         emit_action_executed(
@@ -254,6 +355,17 @@ impl TreasuryContract {
         // Auth check last
         auth::require_admin(&env, &caller)?;
         instance_set(&env, &key, &new_balance);
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::PaymentSent,
+            symbol_short!("emrg_wd"),
+            symbol_short!("emergency"),
+            Some(token.clone()),
+            Some(RESERVE_CATEGORY),
+            Some(balance),
+            Some(new_balance),
+        )?;
 
         events::emit(
             &env,
@@ -279,7 +391,24 @@ impl TreasuryContract {
         referral_contract: Address,
     ) -> Result<(), Error> {
         auth::require_admin(&env, &caller)?;
+        let previous = instance_get::<_, Address>(&env, &REFERRAL_CONTRACT);
+        let was_configured = previous.is_some();
+        if let Some(previous_contract) = previous {
+            auth::revoke_role(&env, &caller, &previous_contract, Role::ServiceActor)?;
+        }
+        auth::grant_role(&env, &caller, &referral_contract, Role::ServiceActor)?;
         instance_set(&env, &REFERRAL_CONTRACT, &referral_contract);
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::ConfigChanged,
+            symbol_short!("ref_ctr"),
+            symbol_short!("admin_cfg"),
+            Some(referral_contract.clone()),
+            None,
+            Some(if was_configured { 1 } else { 0 }),
+            Some(1),
+        )?;
         emit_action_executed(
             &env,
             symbol_short!("treasury"),
@@ -320,17 +449,28 @@ impl TreasuryContract {
         // Auth check after cheap validations pass.
         let referral_contract: Address =
             instance_get(&env, &REFERRAL_CONTRACT).ok_or(Error::Unauthorized)?;
-        referral_contract.require_auth();
+        auth::require_permission(&env, &referral_contract, Permission::ServiceOperation)?;
 
         let remaining = balance - amount;
         instance_set(&env, &key, &remaining);
+        record_treasury_audit(
+            &env,
+            &referral_contract,
+            TimelineEventType::PaymentSent,
+            symbol_short!("reward"),
+            symbol_short!("ref_pay"),
+            Some(token.clone()),
+            Some(REWARDS_CATEGORY),
+            Some(balance),
+            Some(remaining),
+        )?;
 
         emit_commission_paid(&env, &recipient, &token, amount, env.ledger().timestamp());
         emit_action_executed(
             &env,
             symbol_short!("treasury"),
             symbol_short!("reward"),
-            &recipient,
+            &referral_contract,
             true,
             env.ledger().timestamp(),
         );
@@ -350,7 +490,18 @@ impl TreasuryContract {
         config: shared::quota::QuotaConfig,
     ) -> Result<(), Error> {
         auth::require_admin(&env, &caller)?;
-        shared::quota::set_quota_config(&env, &resource, &config)
+        shared::quota::set_quota_config(&env, &resource, &config)?;
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::ConfigChanged,
+            symbol_short!("quota_cfg"),
+            symbol_short!("admin_cfg"),
+            None,
+            Some(resource.clone()),
+            None,
+            None,
+        )
     }
 
     /// Inspect quota usage for an actor/resource pair (maintainer diagnostics).
@@ -362,6 +513,15 @@ impl TreasuryContract {
         shared::quota::get_quota_status(&env, &actor, &resource)
     }
 
+    /// Returns the newest maintainer-only audit entries.
+    pub fn audit_trail(
+        env: Env,
+        maintainer: Address,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<shared::ActionAuditEntry>, Error> {
+        shared::timeline::action_audit_trail(&env, &maintainer, limit)
+    }
+
     /// Reset quota usage for an actor/resource pair (admin override path).
     pub fn reset_quota(
         env: Env,
@@ -371,6 +531,17 @@ impl TreasuryContract {
     ) -> Result<(), Error> {
         auth::require_admin(&env, &caller)?;
         shared::quota::reset_quota(&env, &actor, &resource);
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::ConfigChanged,
+            symbol_short!("quota_rst"),
+            symbol_short!("adm_ovr"),
+            Some(actor.clone()),
+            Some(resource.clone()),
+            None,
+            None,
+        )?;
         Ok(())
     }
 }

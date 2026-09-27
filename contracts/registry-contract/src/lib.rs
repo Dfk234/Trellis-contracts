@@ -78,8 +78,8 @@ impl RegistryContract {
     // ─── Initialization ──────────────────────────────────────────────────────
 
     /// Initialise the contract, setting the admin address.
-    pub fn initialize(env: Env, admin: Address) {
-        shared::auth::set_admin(&env, &admin);
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        auth::initialize_admin(&env, &admin)?;
         emit_module_initialized(
             &env,
             symbol_short!("registry"),
@@ -87,6 +87,7 @@ impl RegistryContract {
             &admin,
             env.ledger().timestamp(),
         );
+        Ok(())
     }
 
     // ─── Contract Registration ─────────────────────────────────────────────
