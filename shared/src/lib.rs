@@ -12,6 +12,7 @@ pub mod migration;
 pub mod payments;
 pub mod quota;
 pub mod storage;
+pub mod telemetry;
 pub mod utils;
 
 // Re-export the most commonly-needed items at crate root for ergonomic use.
@@ -64,6 +65,12 @@ pub use storage::{
     PERSISTENT_TTL_THRESHOLD, TEMPORARY_BUMP_AMOUNT, TEMPORARY_TTL_THRESHOLD,
 };
 pub use utils::{is_expired, now};
+pub use telemetry::{
+    emit_failure, emit_operation, emit_outcome, emit_success, ledger_correlation, publish,
+    ActorType, TelemetryEvent, TelemetryResult, TelemetryTimer, CORE_OPERATIONS,
+    OP_ESCROW_CREATE, OP_ESCROW_RELEASE, OP_PAYMENT_TRANSFER, OP_QUOTA_CONSUME, OP_REBALANCE,
+    TELEMETRY_TOPIC,
+};
 
 pub use canonical::{
     canonical_bytes, canonical_fingerprint, canonicalize_legacy, ensure_supported_encoding,
@@ -74,3 +81,5 @@ pub use canonical::{
 mod test_auth;
 #[cfg(test)]
 mod test_storage;
+#[cfg(test)]
+mod test_telemetry;
