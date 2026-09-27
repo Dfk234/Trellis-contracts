@@ -76,6 +76,10 @@ pub use storage::{
 };
 pub use utils::{is_expired, now};
 
+pub use analytics::{
+    aggregate_events, is_fully_suppressed, is_safe_dimension, is_sensitive_dimension,
+    AggregateBucket, AnalyticsReport, PrivacyConfig, RawObservation, ANALYTICS_METRIC_VERSION,
+};
 pub use timeline::{
     anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry, entry_count,
     entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq, redact_entry,
