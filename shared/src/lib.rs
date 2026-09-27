@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod abuse;
 pub mod auth;
 pub mod batch;
 pub mod canonical;
@@ -7,29 +8,28 @@ pub mod compat;
 pub mod config;
 pub mod errors;
 pub mod events;
+pub mod health;
 pub mod lifecycle;
 pub mod math;
 pub mod migration;
 pub mod payments;
 pub mod quota;
+pub mod recovery;
 pub mod retention;
+pub mod semantic;
 pub mod storage;
 pub mod timeline;
 pub mod utils;
 
 // Re-export the most commonly-needed items at crate root for ergonomic use.
+pub use abuse::{
+    get_abuse_policy, get_abuse_state, record_abuse, set_abuse_policy, AbusePolicy, AbuseState,
+};
 pub use auth::{get_admin, require_admin, require_not_paused, set_admin};
 pub use batch::{
     batch_invoke_no_args, execute_multi_invoke, execute_multi_transfer, multi_transfer_all,
     BatchConfig, BatchError, BatchMode, BatchResult, BatchTransfer, OperationResult,
     ABSOLUTE_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE,
-};
-pub use errors::Error;
-pub use migration::{
-    begin_migration, clear_journal, dry_run, evaluate_post_checks, expected_step, fail_migration,
-    finish_migration, is_resumable, load_journal, mark_step_complete, resume_index, save_journal,
-    DryRunReport, MigrationError, MigrationJournal, MigrationPlan, MigrationStatus, MigrationStep,
-    MigrationStepKind, PostCheck, PostCheckReport, RollbackStrategy,
 };
 pub use compat::{
     current_schema_version, downgrade_v2_to_v1, ensure_supported_version, from_latest,
@@ -42,17 +42,7 @@ pub use config::{
     validate_feature_flag, validate_full_config, validate_network_id, validate_rpc_url,
     validate_secret_key, Environment, RedactedSecret,
 };
-pub use quota::{
-    check_and_consume, get_quota_config, get_quota_status, get_usage, reset_quota,
-    set_quota_config, QuotaConfig, QuotaStatus, QuotaUsage,
-};
-pub use retention::{
-    active_hold, apply_cleanup, class_label, classify, days_to_ledgers, default_policy,
-    get_effective_policy, get_hold, get_record, get_retention_policy, is_frozen, plan_cleanup,
-    plan_cleanup_at, place_hold, put_record, release_hold, set_retention_policy, CleanupEntry,
-    CleanupPlan, CleanupReport, DataClass, HoldReason, RetentionHold, RetentionPolicy,
-    RetentionRecord, HOLD_INDEFINITE, LEDGERS_PER_DAY, MAX_RETAIN_LEDGERS,
-};
+pub use errors::Error;
 pub use events::{
     emit, emit_collection_registered, emit_nft_auction, emit_nft_bid, emit_nft_listed,
     emit_nft_offer, emit_nft_settle, emit_nft_sold, emit_royalty_paid, AID_CLAIMED, AID_CREATED,
@@ -62,10 +52,38 @@ pub use events::{
     REFERRER_SET, TIER_CONFIG_SET, TREASURY_DEPOSIT, TREASURY_EMERGENCY_WITHDRAW, TREASURY_SET,
     TREASURY_WITHDRAW,
 };
+pub use health::{
+    get_dependency_health, list_dependency_health, set_dependency_health, DependencyHealth,
+    DependencyStatus,
+};
+pub use migration::{
+    begin_migration, clear_journal, dry_run, evaluate_post_checks, expected_step, fail_migration,
+    finish_migration, is_resumable, load_journal, mark_step_complete, resume_index, save_journal,
+    DryRunReport, MigrationError, MigrationJournal, MigrationPlan, MigrationStatus, MigrationStep,
+    MigrationStepKind, PostCheck, PostCheckReport, RollbackStrategy,
+};
 pub use payments::{
     calculate_fee, calculate_fee_split, create_escrow, deduct_fee, get_escrow, refund_escrow,
     release_escrow, safe_transfer, safe_transfer_from_contract, EscrowRecord, EscrowState,
     FeeConfig,
+};
+pub use quota::{
+    check_and_consume, get_quota_config, get_quota_status, get_usage, reset_quota,
+    set_quota_config, QuotaConfig, QuotaStatus, QuotaUsage,
+};
+pub use recovery::{
+    get_recovery, list_recoveries, open_recovery, update_recovery_status, RecoveryRecord,
+    RecoveryStatus,
+};
+pub use retention::{
+    active_hold, apply_cleanup, class_label, classify, days_to_ledgers, default_policy,
+    get_effective_policy, get_hold, get_record, get_retention_policy, is_frozen, place_hold,
+    plan_cleanup, plan_cleanup_at, put_record, release_hold, set_retention_policy, CleanupEntry,
+    CleanupPlan, CleanupReport, DataClass, HoldReason, RetentionHold, RetentionPolicy,
+    RetentionRecord, HOLD_INDEFINITE, LEDGERS_PER_DAY, MAX_RETAIN_LEDGERS,
+};
+pub use semantic::{
+    validate_amount, validate_distinct_parties, validate_future_expiry, AmountRule, ExpiryRule,
 };
 pub use storage::{
     instance_get, instance_has, instance_remove, instance_set, is_paused, persistent_extend_ttl,
@@ -77,8 +95,8 @@ pub use utils::{is_expired, now};
 
 pub use timeline::{
     anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry, entry_count,
-    entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq, redact_entry,
-    record_audit_event, timeline_page, viewer_for, AuditEntry, ResourceLink, TimelineEntry,
+    entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq, record_audit_event,
+    redact_entry, timeline_page, viewer_for, AuditEntry, ResourceLink, TimelineEntry,
     TimelineEventType, TimelineKey, TimelinePage, Viewer, Visibility, DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE, MAX_SCAN_PER_PAGE,
 };
@@ -90,6 +108,8 @@ pub use canonical::{
 };
 #[cfg(test)]
 mod test_auth;
+#[cfg(test)]
+mod test_controls;
 #[cfg(test)]
 mod test_storage;
 #[cfg(test)]
