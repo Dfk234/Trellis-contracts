@@ -76,6 +76,11 @@ pub use storage::{
 };
 pub use utils::{is_expired, now};
 
+pub use webhook::{
+    check_timestamp, is_processed, mark_processed, sign_webhook, verify_and_consume,
+    verify_signature, webhook_message, WebhookConfig, WebhookEvent, WebhookKey,
+    MAX_PAYLOAD_BYTES,
+};
 pub use timeline::{
     anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry, entry_count,
     entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq, redact_entry,
