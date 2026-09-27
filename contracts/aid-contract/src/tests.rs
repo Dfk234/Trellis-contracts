@@ -199,7 +199,7 @@ fn create_aid_rejects_non_positive_amount_and_past_expiry() {
     assert_eq!(
         client.try_create_aid(&fx.donor, &fx.recipient, &100, &past),
         Err(Ok(soroban_sdk::Error::from_contract_error(
-            AidError::NotExpiredYet as u32
+            SharedError::InvalidArgument as u32
         )))
     );
 }
@@ -218,7 +218,7 @@ fn refund_aid_after_expiry_returns_funds_to_donor() {
     let aid_id = client.create_aid(&fx.donor, &fx.recipient, &500, &expiry);
     advance_ledger(&fx.env, 101);
 
-    client.refund_aid(&aid_id);
+    client.refund_aid(&aid_id, &fx.donor);
 
     assert_eq!(token_client.balance(&fx.donor), MINT_AMOUNT);
     assert_eq!(token_client.balance(&fx.contract_id), 0);
@@ -234,7 +234,7 @@ fn refund_aid_before_expiry_is_rejected() {
     let expiry = fx.env.ledger().sequence() + 100;
     let aid_id = client.create_aid(&fx.donor, &fx.recipient, &500, &expiry);
 
-    let result = client.try_refund_aid(&aid_id);
+    let result = client.try_refund_aid(&aid_id, &fx.donor);
     assert_eq!(result, Err(Ok(AidError::NotExpiredYet)));
 }
 
@@ -248,7 +248,7 @@ fn refund_claimed_aid_is_rejected() {
     client.claim_aid(&aid_id, &fx.recipient);
     advance_ledger(&fx.env, 101);
 
-    let result = client.try_refund_aid(&aid_id);
+    let result = client.try_refund_aid(&aid_id, &fx.donor);
     assert_eq!(result, Err(Ok(AidError::AlreadyClaimed)));
 }
 
@@ -260,9 +260,9 @@ fn refund_refunded_aid_is_rejected() {
     let expiry = fx.env.ledger().sequence() + 100;
     let aid_id = client.create_aid(&fx.donor, &fx.recipient, &500, &expiry);
     advance_ledger(&fx.env, 101);
-    client.refund_aid(&aid_id);
+    client.refund_aid(&aid_id, &fx.donor);
 
-    let result = client.try_refund_aid(&aid_id);
+    let result = client.try_refund_aid(&aid_id, &fx.donor);
     assert_eq!(result, Err(Ok(AidError::AlreadyRefunded)));
 }
 
@@ -276,7 +276,7 @@ fn refund_by_admin_is_successful() {
     let aid_id = client.create_aid(&fx.donor, &fx.recipient, &500, &expiry);
     advance_ledger(&fx.env, 101);
 
-    client.refund_aid(&aid_id);
+    client.refund_aid(&aid_id, &fx.admin);
 
     assert_eq!(token_client.balance(&fx.donor), MINT_AMOUNT);
     let record = client.get_aid(&aid_id).unwrap();

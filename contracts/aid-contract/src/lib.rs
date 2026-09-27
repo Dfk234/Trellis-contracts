@@ -216,7 +216,7 @@ impl AidContract {
             panic_with_error!(&env, Error::InvalidAmount);
         }
         if expiry_ledger <= env.ledger().sequence() {
-            env.panic_with_error(AidError::NotExpiredYet);
+            panic_with_error!(&env, Error::InvalidArgument);
         }
 
         // Quota enforcement (Issue #65): fail-open when unconfigured so
@@ -355,8 +355,14 @@ impl AidContract {
     /// - [`AidError::AlreadyClaimed`] — already settled.
     /// - [`AidError::AlreadyRefunded`] — already refunded.
     /// - [`AidError::NotExpiredYet`]  — expiry has not yet passed.
-    pub fn refund_aid(env: Env, aid_id: u64) -> Result<(), AidError> {
+    pub fn refund_aid(env: Env, aid_id: u64, caller: Address) -> Result<(), AidError> {
         let mut record = get_aid(&env, aid_id).ok_or(AidError::NotFound)?;
+        caller.require_auth();
+
+        let admin = shared::auth::get_admin(&env);
+        if caller != record.donor && caller != admin {
+            return Err(AidError::Unauthorized);
+        }
 
         // Check status first — avoids expensive ledger read on wrong state
         match record.status {

@@ -27,6 +27,7 @@
 //! For full API details, see the module items below.
 
 use shared::events::{emit_action_executed, emit_module_initialized};
+use shared::storage::{persistent_get, persistent_read, persistent_set};
 use shared::{auth, errors::Error};
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map, Symbol, Vec,
@@ -36,6 +37,8 @@ use soroban_sdk::{
 const KEY_CONTRACTS: Symbol = symbol_short!("contracts");
 const KEY_METADATA: Symbol = symbol_short!("metadata");
 const KEY_HISTORY: Symbol = symbol_short!("history");
+const KEY_NAMES: Symbol = symbol_short!("names");
+const KEY_META_NAMES: Symbol = symbol_short!("meta_nms");
 
 /// Represents a registered contract with its address and version.
 #[contracttype]
@@ -107,30 +110,21 @@ impl RegistryContract {
     ) -> Result<(), Error> {
         auth::require_admin(&env, &caller)?;
 
-        // Always update the contracts map (lightweight — single-key write).
-        let mut contracts: Map<Symbol, ContractRegistration> = env
-            .storage()
-            .instance()
-            .get(&KEY_CONTRACTS)
-            .unwrap_or_else(|| Map::new(&env));
-        contracts.set(
-            name.clone(),
-            ContractRegistration {
+        persistent_set(
+            &env,
+            &(KEY_CONTRACTS, name.clone()),
+            &ContractRegistration {
                 address: address.clone(),
                 version,
             },
         );
-        env.storage().instance().set(&KEY_CONTRACTS, &contracts);
+        push_unique_symbol(&env, &KEY_NAMES, &name);
 
         // Check the latest version first to avoid deserializing the full
         // history Vec when the version already exists.
         // Record version history
-        let mut history: Map<Symbol, Vec<u32>> = env
-            .storage()
-            .instance()
-            .get(&KEY_HISTORY)
-            .unwrap_or_else(|| Map::new(&env));
-        let mut versions = history.get(name.clone()).unwrap_or_else(|| Vec::new(&env));
+        let mut versions: Vec<u32> =
+            persistent_get(&env, &(KEY_HISTORY, name.clone())).unwrap_or_else(|| Vec::new(&env));
 
         // Fast path: if the last element matches, no update needed.
         let already_present =
@@ -139,8 +133,7 @@ impl RegistryContract {
             // Only do the full linear scan if the fast path didn't match.
             if !versions.iter().any(|existing| existing == version) {
                 versions.push_back(version);
-                history.set(name.clone(), versions);
-                env.storage().instance().set(&KEY_HISTORY, &history);
+                persistent_set(&env, &(KEY_HISTORY, name.clone()), &versions);
             }
         }
 
@@ -157,23 +150,14 @@ impl RegistryContract {
 
     /// Resolve the latest registered address and version for `name`.
     pub fn get_contract(env: Env, name: Symbol) -> Result<(Address, u32), Error> {
-        let contracts: Map<Symbol, ContractRegistration> = env
-            .storage()
-            .instance()
-            .get(&KEY_CONTRACTS)
-            .unwrap_or_else(|| Map::new(&env));
-        let registration = contracts.get(name).ok_or(Error::NotFound)?;
+        let registration: ContractRegistration =
+            persistent_read(&env, &(KEY_CONTRACTS, name)).ok_or(Error::NotFound)?;
         Ok((registration.address, registration.version))
     }
 
     /// Return the version history for `name`.
     pub fn get_version_history(env: Env, name: Symbol) -> Result<Vec<u32>, Error> {
-        let history: Map<Symbol, Vec<u32>> = env
-            .storage()
-            .instance()
-            .get(&KEY_HISTORY)
-            .unwrap_or_else(|| Map::new(&env));
-        history.get(name).ok_or(Error::NotFound)
+        persistent_read(&env, &(KEY_HISTORY, name)).ok_or(Error::NotFound)
     }
 
     // ─── Metadata Registry ──────────────────────────────────────────────────
@@ -199,13 +183,9 @@ impl RegistryContract {
         auth::require_admin(&env, &caller)?;
 
         // Check if entry exists and is immutable
-        let metadata_map: Map<Symbol, MetadataEntry> = env
-            .storage()
-            .instance()
-            .get(&KEY_METADATA)
-            .unwrap_or_else(|| Map::new(&env));
-
-        if let Some(existing) = metadata_map.get(name.clone()) {
+        if let Some(existing) =
+            persistent_read::<_, MetadataEntry>(&env, &(KEY_METADATA, name.clone()))
+        {
             if existing.immutable {
                 return Err(Error::ImmutableEntry);
             }
@@ -229,21 +209,15 @@ impl RegistryContract {
             schema_version,
         };
 
-        let mut metadata_map = metadata_map;
-        metadata_map.set(name, entry);
-        env.storage().instance().set(&KEY_METADATA, &metadata_map);
+        persistent_set(&env, &(KEY_METADATA, name.clone()), &entry);
+        push_unique_symbol(&env, &KEY_META_NAMES, &name);
 
         Ok(())
     }
 
     /// Retrieve metadata for an identifier.
     pub fn get_metadata(env: Env, name: Symbol) -> Result<MetadataEntry, Error> {
-        let metadata_map: Map<Symbol, MetadataEntry> = env
-            .storage()
-            .instance()
-            .get(&KEY_METADATA)
-            .unwrap_or_else(|| Map::new(&env));
-        metadata_map.get(name).ok_or(Error::MetadataNotFound)
+        persistent_read(&env, &(KEY_METADATA, name)).ok_or(Error::MetadataNotFound)
     }
 
     /// Get the metadata hash for an identifier (for verification).
@@ -260,45 +234,40 @@ impl RegistryContract {
 
     /// Get the full registry entry (contract + metadata) for an identifier.
     pub fn get_registry_entry(env: Env, name: Symbol) -> Result<RegistryEntry, Error> {
-        let contracts: Map<Symbol, ContractRegistration> = env
-            .storage()
-            .instance()
-            .get(&KEY_CONTRACTS)
-            .unwrap_or_else(|| Map::new(&env));
-        let contract = contracts.get(name.clone()).ok_or(Error::NotFound)?;
-
-        let metadata_map: Map<Symbol, MetadataEntry> = env
-            .storage()
-            .instance()
-            .get(&KEY_METADATA)
-            .unwrap_or_else(|| Map::new(&env));
-        let metadata = metadata_map.get(name).ok_or(Error::MetadataNotFound)?;
+        let contract: ContractRegistration =
+            persistent_read(&env, &(KEY_CONTRACTS, name.clone())).ok_or(Error::NotFound)?;
+        let metadata: MetadataEntry =
+            persistent_read(&env, &(KEY_METADATA, name)).ok_or(Error::MetadataNotFound)?;
 
         Ok(RegistryEntry { contract, metadata })
     }
 
     /// List all registered names.
     pub fn list_names(env: Env) -> Result<Vec<Symbol>, Error> {
-        let contracts: Map<Symbol, ContractRegistration> = env
-            .storage()
-            .instance()
-            .get(&KEY_CONTRACTS)
-            .unwrap_or_else(|| Map::new(&env));
-        let mut names = Vec::new(&env);
-        for key in contracts.keys() {
-            names.push_back(key);
-        }
-        Ok(names)
+        Ok(persistent_read(&env, &KEY_NAMES).unwrap_or_else(|| Vec::new(&env)))
     }
 
     /// List all metadata entries.
     pub fn list_metadata_entries(env: Env) -> Result<Map<Symbol, MetadataEntry>, Error> {
-        let metadata_map: Map<Symbol, MetadataEntry> = env
-            .storage()
-            .instance()
-            .get(&KEY_METADATA)
-            .unwrap_or_else(|| Map::new(&env));
+        let mut metadata_map: Map<Symbol, MetadataEntry> = Map::new(&env);
+        let names: Vec<Symbol> =
+            persistent_read(&env, &KEY_META_NAMES).unwrap_or_else(|| Vec::new(&env));
+        for name in names.iter() {
+            if let Some(entry) =
+                persistent_read::<_, MetadataEntry>(&env, &(KEY_METADATA, name.clone()))
+            {
+                metadata_map.set(name, entry);
+            }
+        }
         Ok(metadata_map)
+    }
+}
+
+fn push_unique_symbol(env: &Env, key: &Symbol, value: &Symbol) {
+    let mut values: Vec<Symbol> = persistent_read(env, key).unwrap_or_else(|| Vec::new(env));
+    if !values.iter().any(|existing| existing == *value) {
+        values.push_back(value.clone());
+        persistent_set(env, key, &values);
     }
 }
 

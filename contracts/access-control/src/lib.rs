@@ -72,8 +72,10 @@ enum DataKey {
     RoleParent(Symbol),
     /// Whether a role name has been registered: `role -> bool`.
     RoleExists(Symbol),
-    /// Members of a role: `role -> Map<Address, bool>`.
-    RoleMembers(Symbol),
+    /// Membership entry: `(role, member) -> bool`.
+    RoleMember(Symbol, Address),
+    /// Direct members ever seen for a role, used for off-chain enumeration.
+    RoleMemberList(Symbol),
     /// Invitation data: `(invitee, role) -> Invitation`
     Invitation(Address, Symbol),
     /// Track invite count per inviter to rate limit: `inviter -> u32`
@@ -620,15 +622,15 @@ impl AccessControlContract {
 
     /// Returns the list of all direct members of `role`.
     pub fn get_role_members(env: Env, role: Symbol) -> Vec<Address> {
-        let members: Map<Address, bool> = env
+        let members: Vec<Address> = env
             .storage()
             .instance()
-            .get(&DataKey::RoleMembers(role))
-            .unwrap_or_else(|| Map::new(&env));
+            .get(&DataKey::RoleMemberList(role.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
 
         let mut result: Vec<Address> = Vec::new(&env);
-        for (addr, is_member) in members.iter() {
-            if is_member {
+        for addr in members.iter() {
+            if role_member(&env, &role, &addr) {
                 result.push_back(addr);
             }
         }
@@ -726,15 +728,21 @@ fn ensure_role_exists(env: &Env, role: &Symbol) -> ContractResult<()> {
 
 /// Grant `role` to `user` — writes the membership entry.
 fn grant_role_internal(env: &Env, role: &Symbol, user: &Address) {
-    let mut members: Map<Address, bool> = env
-        .storage()
-        .instance()
-        .get(&DataKey::RoleMembers(role.clone()))
-        .unwrap_or_else(|| Map::new(env));
-    members.set(user.clone(), true);
     env.storage()
         .instance()
-        .set(&DataKey::RoleMembers(role.clone()), &members);
+        .set(&DataKey::RoleMember(role.clone(), user.clone()), &true);
+
+    let mut members: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::RoleMemberList(role.clone()))
+        .unwrap_or_else(|| Vec::new(env));
+    if !members.iter().any(|member| member == *user) {
+        members.push_back(user.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::RoleMemberList(role.clone()), &members);
+    }
 }
 
 fn has_direct_role(env: &Env, role: &Symbol, user: &Address) -> bool {
@@ -748,27 +756,15 @@ fn has_direct_role(env: &Env, role: &Symbol, user: &Address) -> bool {
 
 /// Revoke `role` from `user` — sets membership to false (soft-delete).
 fn revoke_role_internal(env: &Env, role: &Symbol, user: &Address) {
-    let mut members: Map<Address, bool> = env
-        .storage()
-        .instance()
-        .get(&DataKey::RoleMembers(role.clone()))
-        .unwrap_or_else(|| Map::new(env));
-    members.set(user.clone(), false);
     env.storage()
         .instance()
-        .set(&DataKey::RoleMembers(role.clone()), &members);
+        .set(&DataKey::RoleMember(role.clone(), user.clone()), &false);
 }
 
 /// Recursively check if `user` holds `role` (directly or via ancestors).
 fn has_role_recursive(env: &Env, role: &Symbol, user: &Address) -> bool {
     // Direct membership check.
-    let members: Map<Address, bool> = env
-        .storage()
-        .instance()
-        .get(&DataKey::RoleMembers(role.clone()))
-        .unwrap_or_else(|| Map::new(env));
-
-    if members.get(user.clone()).unwrap_or(false) {
+    if role_member(env, role, user) {
         return true;
     }
 
@@ -782,6 +778,13 @@ fn has_role_recursive(env: &Env, role: &Symbol, user: &Address) -> bool {
     }
 
     false
+}
+
+fn role_member(env: &Env, role: &Symbol, user: &Address) -> bool {
+    env.storage()
+        .instance()
+        .get::<DataKey, bool>(&DataKey::RoleMember(role.clone(), user.clone()))
+        .unwrap_or(false)
 }
 
 /// Returns `true` when `ancestor_candidate` is an ancestor of `role` (i.e.
