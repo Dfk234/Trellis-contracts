@@ -2,11 +2,13 @@
 
 pub mod auth;
 pub mod batch;
+pub mod canonical;
 pub mod compat;
 pub mod config;
 pub mod errors;
 pub mod events;
 pub mod math;
+pub mod migration;
 pub mod payments;
 pub mod quota;
 pub mod storage;
@@ -21,6 +23,12 @@ pub use batch::{
     ABSOLUTE_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE,
 };
 pub use errors::Error;
+pub use migration::{
+    begin_migration, clear_journal, dry_run, evaluate_post_checks, expected_step, fail_migration,
+    finish_migration, is_resumable, load_journal, mark_step_complete, resume_index, save_journal,
+    DryRunReport, MigrationError, MigrationJournal, MigrationPlan, MigrationStatus, MigrationStep,
+    MigrationStepKind, PostCheck, PostCheckReport, RollbackStrategy,
+};
 pub use compat::{
     current_schema_version, downgrade_v2_to_v1, ensure_supported_version, from_latest,
     is_deprecated_version, is_supported_version, migrate_v1_to_v2, new_current_record, to_latest,
@@ -62,6 +70,11 @@ pub use webhook::{
     check_timestamp, is_processed, mark_processed, sign_webhook, verify_and_consume,
     verify_signature, webhook_message, WebhookConfig, WebhookEvent, WebhookKey,
     MAX_PAYLOAD_BYTES,
+};
+pub use canonical::{
+    canonical_bytes, canonical_fingerprint, canonicalize_legacy, ensure_supported_encoding,
+    is_legacy_encoding, normalize_int, normalize_text, parse_legacy_kv, CanonicalPart,
+    CANONICAL_ENCODING_VERSION, LEGACY_ENCODING_VERSION, MAX_FIELD_LEN,
 };
 #[cfg(test)]
 mod test_auth;
