@@ -53,7 +53,7 @@ pub mod types;
 
 use storage::{get_aid, get_aid_counter, has_aid, set_aid, set_aid_counter};
 
-pub use types::{AidPage, AidRecord, AidStatus, SearchIndexRepairReport};
+pub use types::{AidPage, AidPageResponse, AidRecord, AidStatus, SearchIndexRepairReport};
 
 #[allow(dead_code)]
 const MAX_QUERY_LIMIT: u32 = 50;
@@ -113,7 +113,6 @@ impl AidContract {
 
         // Store configuration
         shared::auth::initialize_admin(&env, &admin)?;
-        shared::auth::grant_role(&env, &admin, &admin, shared::auth::Role::Pauser)?;
         storage::set_treasury(&env, &treasury);
         storage::set_token(&env, &token);
         storage::set_default_expiry(&env, default_expiry_secs);
@@ -257,6 +256,8 @@ impl AidContract {
         };
         set_aid(&env, aid_id, &record);
         index_aid(&env, aid_id);
+        storage::append_donor_aid(&env, &donor, aid_id);
+        storage::append_recipient_aid(&env, &recipient, aid_id);
 
         emit_aid_created(
             &env,
@@ -597,7 +598,6 @@ impl AidContract {
         pauser: Address,
         enabled: bool,
     ) -> Result<(), shared::Error> {
-        shared::auth::require_admin(&env, &admin)?;
         let was_pauser = shared::auth::has_role(&env, &pauser, shared::auth::Role::Pauser);
         if enabled {
             shared::auth::grant_role(&env, &admin, &pauser, shared::auth::Role::Pauser)?;
@@ -673,6 +673,95 @@ impl AidContract {
     ) -> AidPage {
         let ids = storage::get_recipient_aids(&env, &recipient);
         paginate(&env, &ids, cursor, limit)
+    }
+
+    /// Stable keyset-paginated search for active aid records that `viewer` is authorized to discover.
+    /// Resumes strictly after `start_after_id` (or from beginning if `None`), guaranteeing stability
+    /// even if records are concurrently settled, hidden, or created.
+    pub fn search_aids_cursor(
+        env: Env,
+        viewer: Address,
+        start_after_id: Option<u64>,
+        limit: u32,
+    ) -> AidPageResponse {
+        viewer.require_auth();
+        let ids = storage::get_search_index(&env);
+        let req = shared::PageRequest::ascending(start_after_id, limit);
+        let res = shared::paginate_id_list(&env, &ids, &req, shared::DEFAULT_MAX_SCAN, |id| {
+            if let Some(record) = get_aid(&env, id) {
+                if can_discover(&env, &record, &viewer) {
+                    return Some(record);
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|_| shared::PageResponse {
+            items: Vec::new(&env),
+            next_cursor: None,
+            has_more: false,
+            scanned_count: 0,
+        });
+
+        AidPageResponse {
+            records: res.items,
+            next_cursor: res.next_cursor,
+            has_more: res.has_more,
+            scanned_count: res.scanned_count,
+        }
+    }
+
+    /// Stable keyset-paginated list of aid records created by `donor`.
+    pub fn list_aids_by_donor_cursor(
+        env: Env,
+        donor: Address,
+        start_after_id: Option<u64>,
+        limit: u32,
+    ) -> AidPageResponse {
+        let ids = storage::get_donor_aids(&env, &donor);
+        let req = shared::PageRequest::ascending(start_after_id, limit);
+        let res = shared::paginate_id_list(&env, &ids, &req, shared::DEFAULT_MAX_SCAN, |id| {
+            get_aid(&env, id)
+        })
+        .unwrap_or_else(|_| shared::PageResponse {
+            items: Vec::new(&env),
+            next_cursor: None,
+            has_more: false,
+            scanned_count: 0,
+        });
+
+        AidPageResponse {
+            records: res.items,
+            next_cursor: res.next_cursor,
+            has_more: res.has_more,
+            scanned_count: res.scanned_count,
+        }
+    }
+
+    /// Stable keyset-paginated list of aid records assigned to `recipient`.
+    pub fn list_aids_by_recipient_cursor(
+        env: Env,
+        recipient: Address,
+        start_after_id: Option<u64>,
+        limit: u32,
+    ) -> AidPageResponse {
+        let ids = storage::get_recipient_aids(&env, &recipient);
+        let req = shared::PageRequest::ascending(start_after_id, limit);
+        let res = shared::paginate_id_list(&env, &ids, &req, shared::DEFAULT_MAX_SCAN, |id| {
+            get_aid(&env, id)
+        })
+        .unwrap_or_else(|_| shared::PageResponse {
+            items: Vec::new(&env),
+            next_cursor: None,
+            has_more: false,
+            scanned_count: 0,
+        });
+
+        AidPageResponse {
+            records: res.items,
+            next_cursor: res.next_cursor,
+            has_more: res.has_more,
+            scanned_count: res.scanned_count,
+        }
     }
 }
 

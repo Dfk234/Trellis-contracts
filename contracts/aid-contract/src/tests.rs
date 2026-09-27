@@ -386,9 +386,11 @@ fn repair_search_index_restores_missing_entries_and_removes_stale_ones() {
     );
 
     // Simulate a partial indexer write and a dangling entry from evicted data.
-    let mut corrupt = Vec::new(&fx.env);
-    corrupt.push_back(99_999);
-    storage::set_search_index(&fx.env, &corrupt);
+    fx.env.as_contract(&fx.contract_id, || {
+        let mut corrupt = Vec::new(&fx.env);
+        corrupt.push_back(99_999);
+        storage::set_search_index(&fx.env, &corrupt);
+    });
 
     let report = client.repair_search_index(&fx.admin);
     assert_eq!(report.indexed, 1);
@@ -399,5 +401,44 @@ fn repair_search_index_restores_missing_entries_and_removes_stale_ones() {
     assert_eq!(results.records.get(0).unwrap().id, aid_id);
 }
 
-// Pagination tests removed: get_aids_by_donor/get_aids_by_recipient
-// not yet implemented on AidContract.
+#[test]
+fn test_stable_cursor_pagination_on_aid_contract() {
+    let fx = setup();
+    let client = AidContractClient::new(&fx.env, &fx.contract_id);
+
+    // Create 5 aids
+    let mut ids = std::vec::Vec::new();
+    let expiry = fx.env.ledger().sequence() + 1000;
+    for _ in 0..5 {
+        ids.push(client.create_aid(&fx.donor, &fx.recipient, &100, &expiry));
+    }
+
+    // Page 1: limit 2
+    let page1 = client.list_aids_by_donor_cursor(&fx.donor, &None, &2);
+    assert_eq!(page1.records.len(), 2);
+    assert_eq!(page1.records.get(0).unwrap().id, ids[0]);
+    assert_eq!(page1.records.get(1).unwrap().id, ids[1]);
+    assert_eq!(page1.next_cursor, Some(ids[1]));
+    assert!(page1.has_more);
+
+    // Page 2: limit 2, start_after_id = ids[1]
+    let page2 = client.list_aids_by_donor_cursor(&fx.donor, &page1.next_cursor, &2);
+    assert_eq!(page2.records.len(), 2);
+    assert_eq!(page2.records.get(0).unwrap().id, ids[2]);
+    assert_eq!(page2.records.get(1).unwrap().id, ids[3]);
+    assert_eq!(page2.next_cursor, Some(ids[3]));
+    assert!(page2.has_more);
+
+    // Page 3: limit 2, start_after_id = ids[3]
+    let page3 = client.list_aids_by_donor_cursor(&fx.donor, &page2.next_cursor, &2);
+    assert_eq!(page3.records.len(), 1);
+    assert_eq!(page3.records.get(0).unwrap().id, ids[4]);
+    assert_eq!(page3.next_cursor, None);
+    assert!(!page3.has_more);
+
+    // Test search_aids_cursor
+    let search_page = client.search_aids_cursor(&fx.donor, &None, &3);
+    assert_eq!(search_page.records.len(), 3);
+    assert_eq!(search_page.next_cursor, Some(ids[2]));
+}
+

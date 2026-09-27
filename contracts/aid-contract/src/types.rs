@@ -48,6 +48,16 @@ pub struct AidPage {
     pub next_cursor: Option<u32>,
 }
 
+/// Stable keyset-paginated response container for aid records.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AidPageResponse {
+    pub records: Vec<AidRecord>,
+    pub next_cursor: Option<u64>,
+    pub has_more: bool,
+    pub scanned_count: u32,
+}
+
 /// Outcome of rebuilding the discovery index from canonical aid storage.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

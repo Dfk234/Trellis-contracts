@@ -1,26 +1,35 @@
 #![no_std]
 
 pub mod abuse;
-pub mod auth;
 pub mod analytics;
+pub mod auth;
 pub mod batch;
 pub mod canonical;
+pub mod client;
 pub mod compat;
 pub mod config;
 pub mod errors;
 pub mod error_taxonomy;
 pub mod events;
+pub mod feature_flags;
+pub mod health;
+pub mod history;
+pub mod idempotency;
 pub mod jobs;
 pub mod lifecycle;
 pub mod math;
 pub mod migration;
+pub mod pagination;
 pub mod payments;
 pub mod policy;
 pub mod quota;
+pub mod reconciliation;
 pub mod recovery;
 pub mod retention;
+pub mod sanitize;
 pub mod semantic;
 pub mod storage;
+pub mod telemetry;
 pub mod timeline;
 pub mod utils;
 pub mod webhook;
@@ -62,10 +71,10 @@ pub use jobs::{
     configure_worker, dead_letter_job_ids, default_worker_config, dedupe_key_pair, dedupe_key_u64,
     discard_dead_letter, enqueue_escrow_refund, enqueue_job, get_job, get_receipt, job_stats,
     next_due_ledger, pause_worker, pending_job_ids, reprocess_job, requeue_dead_letter,
-    resume_worker, run_due_job, worker_config, EnqueueOutcome, Job, JobCounters, JobError,
-    JobHandler, JobKind, JobPayload, JobReceipt, JobStats, JobStatus, RetryPolicy, RunOutcome,
-    WorkerConfig, WorkerKey, ESCROW_REFUND_TAG, JOB_DEAD_LETTERED, JOB_ENQUEUED, JOB_REQUEUED,
-    JOB_RETRIED, JOB_SUCCEEDED, JOB_TOPIC,
+    resume_worker, run_due_job, worker_config, BackoffMode, DeadLetterRecord, EnqueueOutcome, Job,
+    JobCounters, JobError, JobHandler, JobKind, JobPayload, JobReceipt, JobStats, JobStatus,
+    RetryPolicy, RunOutcome, WorkerConfig, WorkerKey, ESCROW_REFUND_TAG, JOB_DEAD_LETTERED,
+    JOB_ENQUEUED, JOB_REQUEUED, JOB_RETRIED, JOB_SUCCEEDED, JOB_TOPIC,
 };
 pub use retention::{
     active_hold, apply_cleanup, class_label, classify, days_to_ledgers, default_policy,
@@ -87,31 +96,15 @@ pub use health::{
     get_dependency_health, list_dependency_health, set_dependency_health, DependencyHealth,
     DependencyStatus,
 };
-pub use migration::{
-    begin_migration, clear_journal, dry_run, evaluate_post_checks, expected_step, fail_migration,
-    finish_migration, is_resumable, load_journal, mark_step_complete, resume_index, save_journal,
-    DryRunReport, MigrationError, MigrationJournal, MigrationPlan, MigrationStatus, MigrationStep,
-    MigrationStepKind, PostCheck, PostCheckReport, RollbackStrategy,
-};
 pub use payments::{
     calculate_fee, calculate_fee_split, create_escrow, deduct_fee, get_escrow, refund_escrow,
     release_escrow, safe_transfer, safe_transfer_from_contract, EscrowRecord, EscrowState,
     FeeConfig,
 };
-pub use quota::{
-    check_and_consume, get_quota_config, get_quota_status, get_usage, reset_quota,
-    set_quota_config, QuotaConfig, QuotaStatus, QuotaUsage,
-};
 pub use recovery::{
-    get_recovery, list_recoveries, open_recovery, update_recovery_status, RecoveryRecord,
-    RecoveryStatus,
-};
-pub use retention::{
-    active_hold, apply_cleanup, class_label, classify, days_to_ledgers, default_policy,
-    get_effective_policy, get_hold, get_record, get_retention_policy, is_frozen, place_hold,
-    plan_cleanup, plan_cleanup_at, put_record, release_hold, set_retention_policy, CleanupEntry,
-    CleanupPlan, CleanupReport, DataClass, HoldReason, RetentionHold, RetentionPolicy,
-    RetentionRecord, HOLD_INDEFINITE, LEDGERS_PER_DAY, MAX_RETAIN_LEDGERS,
+    abandon, complete_step, diagnostics, fail_step, is_stuck, next_action,
+    open_operation, resume, OperationKind, OperationState, RecoveryCheckpoint,
+    RecoveryDiagnostics, RecoveryError, RecoveryStep, StepOutcome,
 };
 pub use semantic::{
     validate_amount, validate_distinct_parties, validate_future_expiry, AmountRule, ExpiryRule,
@@ -129,7 +122,6 @@ pub use telemetry::{
     OP_ESCROW_CREATE, OP_ESCROW_RELEASE, OP_PAYMENT_TRANSFER, OP_QUOTA_CONSUME, OP_REBALANCE,
     TELEMETRY_TOPIC,
 };
-
 pub use analytics::{
     aggregate_events, is_fully_suppressed, is_safe_dimension, is_sensitive_dimension,
     AggregateBucket, AnalyticsReport, PrivacyConfig, RawObservation, ANALYTICS_METRIC_VERSION,
@@ -141,15 +133,27 @@ pub use timeline::{
     ActionAuditEntry, AuditEntry, ResourceLink, TimelineEntry, TimelineEventType, TimelineKey,
     TimelinePage, Viewer, Visibility, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_SCAN_PER_PAGE,
 };
-
 pub use canonical::{
     canonical_bytes, canonical_fingerprint, canonicalize_legacy, ensure_supported_encoding,
     is_legacy_encoding, normalize_int, normalize_text, parse_legacy_kv, CanonicalPart,
     CANONICAL_ENCODING_VERSION, LEGACY_ENCODING_VERSION, MAX_FIELD_LEN,
 };
-
 pub use reconciliation::{
     run_reconciliation, DriftItem, DriftType, ReconciliationReport, SourceRecord,
+};
+pub use sanitize::{
+    sanitize_text, sanitize_url, trim_whitespace, validate_external_url, validate_safe_text,
+    SafeScheme, MAX_TEXT_LEN, MAX_URL_LEN,
+};
+pub use pagination::{
+    paginate_id_list, paginate_id_range, Direction, PageRequest, PageResponse, DEFAULT_MAX_SCAN,
+    DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT,
+};
+pub use client::{
+    client_schema_fingerprint, format_client_error, AidSummaryResponse, ClientErrorResponse,
+    ClientReceipt, CreateAidRequest, CreateEscrowRequest, CreateListingRequest,
+    CreateProposalRequest, EscrowSummaryResponse, ListingSummaryResponse, OperationStatus,
+    ProposalSummaryResponse, RebalanceRequest, RebalanceSummaryResponse, CLIENT_SCHEMA_VERSION,
 };
 
 #[cfg(test)]
@@ -163,3 +167,9 @@ mod test_jobs;
 mod test_storage;
 #[cfg(test)]
 mod test_timeline;
+#[cfg(test)]
+mod test_sanitize;
+#[cfg(test)]
+mod test_pagination;
+#[cfg(test)]
+mod test_client;

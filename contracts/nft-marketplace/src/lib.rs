@@ -658,6 +658,8 @@ impl NftMarketplace {
         if metadata_hash.len() != METADATA_HASH_LEN {
             return Err(MarketError::InvalidMetadataHash);
         }
+        shared::sanitize::validate_external_url(&ipfs_uri, shared::sanitize::MAX_URL_LEN, false)
+            .map_err(|_| MarketError::InvalidArgument)?;
 
         let mut total_bps: i128 = 0;
         for r in royalty_recipients.iter() {

@@ -196,10 +196,8 @@ impl RegistryContract {
             return Err(Error::InvalidHash);
         }
 
-        // Validate URI (ensure it's not empty)
-        if uri.is_empty() {
-            return Err(Error::InvalidArgument);
-        }
+        // Validate URI (ensure safe schemes like HTTPS, IPFS, Arweave; reject javascript:, data:, CRLF)
+        shared::sanitize::validate_external_url(&uri, shared::sanitize::MAX_URL_LEN, false)?;
 
         let entry = MetadataEntry {
             uri,
