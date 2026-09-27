@@ -21,6 +21,8 @@ pub const REFERRAL_REGISTERED: Symbol = symbol_short!("ref_reg");
 pub const PROPOSAL_CREATED: Symbol = symbol_short!("prop_new");
 pub const PROPOSAL_APPROVED: Symbol = symbol_short!("prop_apr");
 pub const PROPOSAL_EXECUTED: Symbol = symbol_short!("prop_exc");
+pub const PROPOSAL_CANCELLED: Symbol = symbol_short!("prop_can");
+pub const PROPOSAL_EXPIRED: Symbol = symbol_short!("prop_exp");
 pub const ROLE_GRANTED: Symbol = symbol_short!("role_grt");
 pub const ROLE_REVOKED: Symbol = symbol_short!("role_rvk");
 
@@ -111,10 +113,16 @@ pub fn emit_aid_refunded(env: &Env, aid_id: u64, donor: &Address, amount: i128, 
 /// Topics: `("comm", "paid")`
 ///
 /// Data: `(recipient, amount, paid_at)`
-pub fn emit_commission_paid(env: &Env, recipient: &Address, amount: i128, paid_at: u64) {
+pub fn emit_commission_paid(
+    env: &Env,
+    recipient: &Address,
+    token: &Address,
+    amount: i128,
+    paid_at: u64,
+) {
     env.events().publish(
         (symbol_short!("comm"), symbol_short!("paid")),
-        (recipient.clone(), amount, paid_at),
+        (recipient.clone(), token.clone(), amount, paid_at),
     );
 }
 
@@ -122,17 +130,18 @@ pub fn emit_commission_paid(env: &Env, recipient: &Address, amount: i128, paid_a
 ///
 /// Topics: `("treasury", "deposit")`
 ///
-/// Data: `(category, depositor, amount, new_balance)`
+/// Data: `(category, depositor, token, amount, new_balance)`
 pub fn emit_treasury_deposit(
     env: &Env,
     category: Symbol,
     depositor: &Address,
+    token: &Address,
     amount: i128,
     new_balance: i128,
 ) {
     env.events().publish(
         (symbol_short!("treasury"), symbol_short!("deposit")),
-        (category, depositor.clone(), amount, new_balance),
+        (category, depositor.clone(), token.clone(), amount, new_balance),
     );
 }
 
@@ -140,17 +149,18 @@ pub fn emit_treasury_deposit(
 ///
 /// Topics: `("treasury", "withdraw")`
 ///
-/// Data: `(category, recipient, amount, remaining_balance)`
+/// Data: `(category, recipient, token, amount, remaining_balance)`
 pub fn emit_treasury_withdrawal(
     env: &Env,
     category: Symbol,
     recipient: &Address,
+    token: &Address,
     amount: i128,
     remaining_balance: i128,
 ) {
     env.events().publish(
         (symbol_short!("treasury"), symbol_short!("withdraw")),
-        (category, recipient.clone(), amount, remaining_balance),
+        (category, recipient.clone(), token.clone(), amount, remaining_balance),
     );
 }
 
