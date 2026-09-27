@@ -76,6 +76,11 @@ pub use storage::{
 };
 pub use utils::{is_expired, now};
 
+pub use policy::{
+    evaluate, require_policy, validate_policy, PolicyConfig, PolicyDecision, PolicyInput,
+    PolicyReason, DEFAULT_ALLOWED_MAX_TIER, DEFAULT_MAX_AMOUNT, DEFAULT_MAX_DAILY_OPS,
+    DEFAULT_MIN_AMOUNT,
+};
 pub use timeline::{
     anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry, entry_count,
     entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq, redact_entry,
