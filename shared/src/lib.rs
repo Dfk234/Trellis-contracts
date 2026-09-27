@@ -83,6 +83,12 @@ pub use storage::{
     PERSISTENT_TTL_THRESHOLD, TEMPORARY_BUMP_AMOUNT, TEMPORARY_TTL_THRESHOLD,
 };
 pub use utils::{is_expired, now};
+pub use telemetry::{
+    emit_failure, emit_operation, emit_outcome, emit_success, ledger_correlation, publish,
+    ActorType, TelemetryEvent, TelemetryResult, TelemetryTimer, CORE_OPERATIONS,
+    OP_ESCROW_CREATE, OP_ESCROW_RELEASE, OP_PAYMENT_TRANSFER, OP_QUOTA_CONSUME, OP_REBALANCE,
+    TELEMETRY_TOPIC,
+};
 
 pub use analytics::{
     aggregate_events, is_fully_suppressed, is_safe_dimension, is_sensitive_dimension,

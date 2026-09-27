@@ -24,6 +24,7 @@
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 use crate::errors::Error;
+use crate::telemetry::{emit_failure, emit_success, ActorType, OP_QUOTA_CONSUME};
 use crate::storage::{instance_get, instance_set, persistent_get, persistent_set};
 
 /// Per-resource quota limits.
@@ -179,6 +180,7 @@ pub fn check_and_consume(
     amount: i128,
 ) -> Result<QuotaUsage, Error> {
     if amount < 0 {
+        emit_failure(env, OP_QUOTA_CONSUME, ActorType::User, 0);
         return Err(Error::InvalidAmount);
     }
     // Emergency kill switch: maintainers can enable the quota-bypass feature
@@ -188,10 +190,12 @@ pub fn check_and_consume(
         return Ok(get_usage(env, actor, resource));
     }
     let Some(cfg) = get_quota_config(env, resource) else {
+        emit_success(env, OP_QUOTA_CONSUME, ActorType::User, 0);
         return Ok(get_usage(env, actor, resource));
     };
     // Cheap-first: per-op amount cap before any storage write.
     if cfg.max_amount_per_op > 0 && amount > cfg.max_amount_per_op {
+        emit_failure(env, OP_QUOTA_CONSUME, ActorType::User, 0);
         return Err(Error::QuotaExceeded);
     }
     let key = usage_key(actor, resource);
@@ -208,11 +212,13 @@ pub fn check_and_consume(
         usage.window_start = now;
     }
     if usage.count >= cfg.max_ops_per_window {
+        emit_failure(env, OP_QUOTA_CONSUME, ActorType::User, 0);
         return Err(Error::QuotaExceeded);
     }
     usage.count = usage.count.saturating_add(1);
     usage.total_amount = usage.total_amount.saturating_add(amount);
     persistent_set(env, &key, &usage);
+    emit_success(env, OP_QUOTA_CONSUME, ActorType::User, 0);
     Ok(usage)
 }
 
