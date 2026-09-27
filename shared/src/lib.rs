@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod abuse;
 pub mod auth;
 pub mod analytics;
 pub mod batch;
@@ -18,6 +19,7 @@ pub mod policy;
 pub mod quota;
 pub mod recovery;
 pub mod retention;
+pub mod semantic;
 pub mod storage;
 pub mod timeline;
 pub mod utils;
@@ -81,10 +83,38 @@ pub use events::{
     REFERRER_SET, TIER_CONFIG_SET, TREASURY_DEPOSIT, TREASURY_EMERGENCY_WITHDRAW, TREASURY_SET,
     TREASURY_WITHDRAW,
 };
+pub use health::{
+    get_dependency_health, list_dependency_health, set_dependency_health, DependencyHealth,
+    DependencyStatus,
+};
+pub use migration::{
+    begin_migration, clear_journal, dry_run, evaluate_post_checks, expected_step, fail_migration,
+    finish_migration, is_resumable, load_journal, mark_step_complete, resume_index, save_journal,
+    DryRunReport, MigrationError, MigrationJournal, MigrationPlan, MigrationStatus, MigrationStep,
+    MigrationStepKind, PostCheck, PostCheckReport, RollbackStrategy,
+};
 pub use payments::{
     calculate_fee, calculate_fee_split, create_escrow, deduct_fee, get_escrow, refund_escrow,
     release_escrow, safe_transfer, safe_transfer_from_contract, EscrowRecord, EscrowState,
     FeeConfig,
+};
+pub use quota::{
+    check_and_consume, get_quota_config, get_quota_status, get_usage, reset_quota,
+    set_quota_config, QuotaConfig, QuotaStatus, QuotaUsage,
+};
+pub use recovery::{
+    get_recovery, list_recoveries, open_recovery, update_recovery_status, RecoveryRecord,
+    RecoveryStatus,
+};
+pub use retention::{
+    active_hold, apply_cleanup, class_label, classify, days_to_ledgers, default_policy,
+    get_effective_policy, get_hold, get_record, get_retention_policy, is_frozen, place_hold,
+    plan_cleanup, plan_cleanup_at, put_record, release_hold, set_retention_policy, CleanupEntry,
+    CleanupPlan, CleanupReport, DataClass, HoldReason, RetentionHold, RetentionPolicy,
+    RetentionRecord, HOLD_INDEFINITE, LEDGERS_PER_DAY, MAX_RETAIN_LEDGERS,
+};
+pub use semantic::{
+    validate_amount, validate_distinct_parties, validate_future_expiry, AmountRule, ExpiryRule,
 };
 pub use storage::{
     instance_get, instance_has, instance_remove, instance_set, is_paused, persistent_extend_ttl,
