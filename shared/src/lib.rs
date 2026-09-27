@@ -13,6 +13,7 @@ pub mod math;
 pub mod migration;
 pub mod payments;
 pub mod quota;
+pub mod recovery;
 pub mod retention;
 pub mod storage;
 pub mod timeline;
