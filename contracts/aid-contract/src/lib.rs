@@ -38,10 +38,13 @@ use shared::events::{
     emit_action_executed, emit_aid_created, emit_module_initialized, emit_permission_changed,
 };
 use shared::storage::{is_paused, persistent_get, persistent_set, set_paused as shared_set_paused};
-use shared::{emit, Error, AID_CLAIMED, AID_CREATED, AID_REFUNDED, AID_SETTLED};
+use shared::{
+    emit, record_action_audit_event, Error, ResourceLink, TimelineEventType, AID_CLAIMED,
+    AID_CREATED, AID_REFUNDED, AID_SETTLED,
+};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, panic_with_error, symbol_short, token, Address, Env,
-    Map, Symbol, Vec,
+    contract, contracterror, contractimpl, panic_with_error, symbol_short, token, Address, Bytes,
+    Env, Map, Symbol, Vec,
 };
 
 pub mod api;
@@ -109,10 +112,9 @@ impl AidContract {
             return Err(shared::Error::AlreadyInitialized);
         }
 
-        admin.require_auth();
-
         // Store configuration
-        shared::auth::set_admin(&env, &admin);
+        shared::auth::initialize_admin(&env, &admin)?;
+        shared::auth::grant_role(&env, &admin, &admin, shared::auth::Role::Pauser)?;
         storage::set_treasury(&env, &treasury);
         storage::set_token(&env, &token);
         storage::set_default_expiry(&env, default_expiry_secs);
@@ -595,13 +597,59 @@ impl AidContract {
     // Admin controls
     // -----------------------------------------------------------------------
 
-    /// Pause or resume the contract. Admin only.
+    /// Grant or revoke the role allowed to pause or resume the contract.
+    pub fn set_pauser(
+        env: Env,
+        admin: Address,
+        pauser: Address,
+        enabled: bool,
+    ) -> Result<(), shared::Error> {
+        shared::auth::require_admin(&env, &admin)?;
+        let was_pauser = shared::auth::has_role(&env, &pauser, shared::auth::Role::Pauser);
+        if enabled {
+            shared::auth::grant_role(&env, &admin, &pauser, shared::auth::Role::Pauser)?;
+        } else {
+            shared::auth::revoke_role(&env, &admin, &pauser, shared::auth::Role::Pauser)?;
+        }
+        record_action_audit_event(
+            &env,
+            &admin,
+            TimelineEventType::RoleChanged,
+            ResourceLink {
+                kind: Bytes::from_slice(&env, b"aid"),
+                id: 0,
+                revision: 0,
+            },
+            symbol_short!("aid"),
+            symbol_short!("pauser"),
+            if enabled {
+                symbol_short!("adm_grant")
+            } else {
+                symbol_short!("adm_rvok")
+            },
+            Some(pauser.clone()),
+            Some(symbol_short!("pauser")),
+            Some(if was_pauser { 1 } else { 0 }),
+            Some(if enabled { 1 } else { 0 }),
+        )?;
+        emit_permission_changed(
+            &env,
+            symbol_short!("aid"),
+            symbol_short!("pauser"),
+            &pauser,
+            enabled,
+            env.ledger().timestamp(),
+        );
+        Ok(())
+    }
+
+    /// Pause or resume the contract. Requires the Pauser permission.
     pub fn set_paused(env: Env, admin: Address, paused: bool) {
-        let contract_admin = shared::auth::get_admin(&env);
-        if admin != contract_admin {
+        if shared::auth::require_permission(&env, &admin, shared::auth::Permission::PauseContracts)
+            .is_err()
+        {
             env.panic_with_error(shared::Error::Unauthorized);
         }
-        admin.require_auth();
 
         env.storage()
             .instance()

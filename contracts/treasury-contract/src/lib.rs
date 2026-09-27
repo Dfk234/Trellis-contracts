@@ -31,7 +31,7 @@
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Bytes, Env, Symbol};
 
-use shared::auth::{self, Role};
+use shared::auth::{self, Permission, Role};
 use shared::errors::Error;
 use shared::events::{
     self, emit_action_executed, emit_commission_paid, emit_module_initialized,
@@ -94,22 +94,13 @@ impl TreasuryContract {
     /// the `TreasuryManager` role, and sets the initial max
     /// per-transaction withdrawal limit.
     pub fn initialize(env: Env, admin: Address, max_withdrawal_limit: i128) -> Result<(), Error> {
-        if env.storage().instance().has(&shared::auth::KEY_ADMIN) {
-            return Err(Error::AlreadyInitialized);
-        }
         if max_withdrawal_limit <= 0 {
             return Err(Error::InvalidArgument);
         }
-        admin.require_auth();
-        auth::set_admin(&env, &admin);
+        auth::initialize_admin(&env, &admin)?;
         persistent_set(
             &env,
             &shared::auth::DataKey::Role(admin.clone(), Role::TreasuryManager),
-            &true,
-        );
-        persistent_set(
-            &env,
-            &shared::auth::DataKey::Role(admin.clone(), Role::Admin),
             &true,
         );
         instance_set(&env, &MAX_WD, &max_withdrawal_limit);
@@ -228,7 +219,7 @@ impl TreasuryContract {
         if amount <= 0 {
             return Err(Error::InvalidArgument);
         }
-        auth::require_role(&env, &caller, Role::TreasuryManager)?;
+        auth::require_permission(&env, &caller, Permission::TreasuryOperations)?;
         let key = (BALANCE, token.clone(), category.clone());
         let balance: i128 = env.storage().instance().get(&key).unwrap_or(0);
         let new_balance = balance.checked_add(amount).ok_or(Error::Overflow)?;
@@ -301,7 +292,7 @@ impl TreasuryContract {
         }
 
         // Auth check last
-        auth::require_role(&env, &caller, Role::TreasuryManager)?;
+        auth::require_permission(&env, &caller, Permission::TreasuryOperations)?;
 
         // Quota enforcement: fail-open when unconfigured.
         shared::quota::check_and_consume(&env, &caller, &symbol_short!("wdraw"), amount)?;
@@ -401,6 +392,11 @@ impl TreasuryContract {
     ) -> Result<(), Error> {
         auth::require_admin(&env, &caller)?;
         let previous = instance_get::<_, Address>(&env, &REFERRAL_CONTRACT);
+        let was_configured = previous.is_some();
+        if let Some(previous_contract) = previous {
+            auth::revoke_role(&env, &caller, &previous_contract, Role::ServiceActor)?;
+        }
+        auth::grant_role(&env, &caller, &referral_contract, Role::ServiceActor)?;
         instance_set(&env, &REFERRAL_CONTRACT, &referral_contract);
         record_treasury_audit(
             &env,
@@ -410,7 +406,7 @@ impl TreasuryContract {
             symbol_short!("admin_cfg"),
             Some(referral_contract.clone()),
             None,
-            Some(if previous.is_some() { 1 } else { 0 }),
+            Some(if was_configured { 1 } else { 0 }),
             Some(1),
         )?;
         emit_action_executed(
@@ -453,7 +449,7 @@ impl TreasuryContract {
         // Auth check after cheap validations pass.
         let referral_contract: Address =
             instance_get(&env, &REFERRAL_CONTRACT).ok_or(Error::Unauthorized)?;
-        referral_contract.require_auth();
+        auth::require_permission(&env, &referral_contract, Permission::ServiceOperation)?;
 
         let remaining = balance - amount;
         instance_set(&env, &key, &remaining);

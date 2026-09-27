@@ -25,4 +25,6 @@ pub enum OracleError {
     Unauthorized = 508,
     /// A generic error occurred.
     InternalError = 509,
+    /// The contract has already been initialized.
+    AlreadyInitialized = 510,
 }

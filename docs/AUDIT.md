@@ -1,22 +1,19 @@
 # Maintainer audit trail
 
-Sensitive treasury mutations are recorded in the contract's append-only
-maintainer audit store in the same Soroban invocation as the state change. If
-the audit write fails, the invocation fails rather than committing an
-unaudited mutation.
+Sensitive maintainer and service mutations are recorded in the contract's
+append-only action audit store in the same Soroban invocation as the state
+change. If the audit write fails, the invocation fails rather than committing
+an unaudited mutation.
 
-## Covered treasury actions
+## Covered actions
 
 | Action | Actor | Recorded context |
 |---|---|---|
-| One-time initialization | Initial admin | Initial withdrawal limit |
-| Treasury-manager grant and revocation | Admin | Role state before and after |
-| Withdrawal-limit change | Admin | Previous and new limit |
-| Deposit and withdrawal | Treasury manager | Token, category, and balance before and after |
-| Emergency withdrawal | Admin | Token, reserve category, and balance before and after |
-| Referral-contract change | Admin | Whether a referral contract was configured |
-| Referral reward payout | Registered referral contract | Rewards balance before and after |
-| Quota configuration and reset | Admin | Stable action and reason codes |
+| Treasury initialization, manager grants/revocations, limits, deposits, withdrawals, emergency withdrawals, referral routing, rewards, and quota overrides | Admin, treasury manager, or registered referral service | Resource/attribute and relevant state before/after |
+| Access-control initialization, admin/role changes, role hierarchy, and invitation lifecycle | Authenticated admin, inviter, or invitee | Actor, target, role, action, and membership state |
+| Aid pauser grants/revocations | Admin | Target, role, and membership state |
+| Referral manager grants/revocations | Admin | Target, role, and membership state |
+| Oracle submitter registration/deactivation | Admin | Submitter and active state before/after |
 
 The audit entry also includes the treasury scope, a stable action label, a
 stable reason code, the ledger sequence, and ledger timestamp. Audit context
@@ -32,13 +29,14 @@ Soroban storage TTLs still apply to those queryable copies.
 
 ## Reading entries
 
-The treasury contract exposes `audit_trail(maintainer, limit)` for structured
-action records. The caller must authenticate and hold the shared `Admin` role.
-Results are returned newest first; a limit of zero selects the default page
-size and requests above the maximum are rejected. The legacy
-`shared::timeline::audit_trail` accessor remains available for the original
-audit-record schema. Both stores use separate keys and neither can be returned
-from the participant-facing timeline.
+The treasury and access-control contracts expose `audit_trail(maintainer,
+limit)` for structured action records. The caller must authenticate and hold
+the shared `Admin` role; a legacy stored admin address is also accepted during
+upgrade compatibility. Results are returned newest first; a limit of zero
+selects the default page size and requests above the maximum are rejected. The
+legacy `shared::timeline::audit_trail` accessor remains available for the
+original audit-record schema. Both stores use separate keys and neither can be
+returned from the participant-facing timeline.
 
 The shared timeline API can also be used by other contract domains:
 `record_action_audit_event` writes an authenticated action with scope, stable

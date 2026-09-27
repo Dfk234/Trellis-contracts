@@ -46,8 +46,21 @@ fn test_double_initialize() {
     let fx = setup();
     let client = OracleContractClient::new(&fx.env, &fx.contract_id);
     let new_admin = Address::generate(&fx.env);
-    client.initialize(&new_admin);
-    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(
+        client.try_initialize(&new_admin),
+        Err(Ok(OracleError::AlreadyInitialized))
+    );
+    assert_eq!(client.get_admin(), fx.admin);
+}
+
+#[test]
+fn test_initialize_requires_the_admin_signature() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    assert!(client.try_initialize(&admin).is_err());
 }
 
 #[test]

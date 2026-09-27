@@ -35,7 +35,7 @@ use shared::utils::{is_expired, now};
 // Marketplace-local error codes
 // ===========================================================================
 
-/// Marketplace-specific error codes (2000–2024).
+/// Marketplace-specific error codes (2000–2023).
 #[soroban_sdk::contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -86,6 +86,8 @@ pub enum MarketError {
     Unauthorized = 2021,
     /// Invalid argument supplied.
     InvalidArgument = 2022,
+    /// The contract has already been initialized.
+    AlreadyInitialized = 2023,
 }
 
 /// Result type alias for marketplace operations.
@@ -507,7 +509,10 @@ impl NftMarketplace {
             return Err(MarketError::InvalidArgument);
         }
 
-        auth::set_admin(&env, &admin);
+        auth::initialize_admin(&env, &admin).map_err(|error| match error {
+            shared::Error::AlreadyInitialized => MarketError::AlreadyInitialized,
+            _ => MarketError::Unauthorized,
+        })?;
         instance_set(&env, &KEY_PLATFORM_FEE_BPS, &platform_fee_bps);
         instance_set(&env, &KEY_FEE_RECIPIENT, &fee_recipient);
         instance_set(&env, &KEY_BID_INCREMENT_BPS, &bid_increment_bps);
@@ -1634,12 +1639,8 @@ impl NftMarketplace {
 // ===========================================================================
 
 fn require_admin(env: &Env, caller: &Address) -> MktResult<()> {
-    let admin = shared::auth::get_admin(env);
-    if *caller != admin {
-        return Err(MarketError::Unauthorized);
-    }
-    caller.require_auth();
-    Ok(())
+    shared::auth::require_permission(env, caller, shared::auth::Permission::ManageConfiguration)
+        .map_err(|_| MarketError::Unauthorized)
 }
 
 fn require_not_paused(env: &Env) -> MktResult<()> {

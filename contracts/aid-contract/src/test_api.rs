@@ -1,10 +1,11 @@
 
-use soroban_sdk::{Env, Address};
 use crate::AidContract;
+use soroban_sdk::{Address, Env};
 
 #[test]
 fn test_list_aids() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register_contract(None, AidContract);
     let client = AidContractClient::new(&env, &contract_id);
 
@@ -32,6 +33,7 @@ fn test_list_aids() {
 #[test]
 fn test_list_aids_by_donor() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register_contract(None, AidContract);
     let client = AidContractClient::new(&env, &contract_id);
 

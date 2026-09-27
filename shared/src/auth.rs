@@ -28,6 +28,36 @@ pub enum Role {
     ReferralManager,
     /// Authorised to post oracle signatures / verification proofs.
     OracleSigner,
+    /// User-scoped access to resources owned by the address.
+    EndUser,
+    /// Authorised service or contract actor.
+    ServiceActor,
+}
+
+/// Named capabilities mapped centrally to the role required to exercise them.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Permission {
+    /// End-user access remains scoped to records owned by the authenticated address.
+    UseOwnResources,
+    /// Change contract configuration or manage roles.
+    ManageConfiguration,
+    /// Grant or revoke roles.
+    ManageRoles,
+    /// Move treasury funds.
+    TreasuryOperations,
+    /// Pause or resume a contract.
+    PauseContracts,
+    /// Change referral configuration.
+    ReferralConfiguration,
+    /// Submit an oracle update.
+    SubmitOracle,
+    /// Propose or execute a contract upgrade.
+    UpgradeContracts,
+    /// Read maintainer-only audit records.
+    ReadAuditTrail,
+    /// Perform an explicitly registered service operation.
+    ServiceOperation,
 }
 
 // ---------------------------------------------------------------------------
@@ -50,6 +80,18 @@ pub fn set_admin(env: &Env, admin: &Address) {
     env.storage()
         .instance()
         .set::<Symbol, Address>(&KEY_ADMIN, admin);
+}
+
+/// Initializes the shared admin identity exactly once and requires its
+/// signature. Also grants the Admin role used by permission checks.
+pub fn initialize_admin(env: &Env, admin: &Address) -> Result<(), Error> {
+    if env.storage().instance().has(&KEY_ADMIN) {
+        return Err(Error::AlreadyInitialized);
+    }
+    admin.require_auth();
+    set_admin(env, admin);
+    persistent_set(env, &DataKey::Role(admin.clone(), Role::Admin), &true);
+    Ok(())
 }
 
 /// Returns the current admin address.
@@ -138,6 +180,36 @@ pub fn require_role(env: &Env, caller: &Address, role: Role) -> Result<(), Error
     }
     caller.require_auth();
     Ok(())
+}
+
+/// Returns the role required for a named capability.
+pub fn role_for_permission(permission: Permission) -> Role {
+    match permission {
+        Permission::UseOwnResources => Role::EndUser,
+        Permission::ManageConfiguration | Permission::ManageRoles | Permission::ReadAuditTrail => {
+            Role::Admin
+        }
+        Permission::TreasuryOperations => Role::TreasuryManager,
+        Permission::PauseContracts => Role::Pauser,
+        Permission::ReferralConfiguration => Role::ReferralManager,
+        Permission::SubmitOracle => Role::OracleSigner,
+        Permission::UpgradeContracts => Role::Upgrader,
+        Permission::ServiceOperation => Role::ServiceActor,
+    }
+}
+
+/// Returns whether `user` holds the role required for `permission`.
+pub fn has_permission(env: &Env, user: &Address, permission: Permission) -> bool {
+    has_role(env, user, role_for_permission(permission))
+}
+
+/// Checks a named capability and the caller's on-chain signature.
+pub fn require_permission(
+    env: &Env,
+    caller: &Address,
+    permission: Permission,
+) -> Result<(), Error> {
+    require_role(env, caller, role_for_permission(permission))
 }
 
 // ---------------------------------------------------------------------------

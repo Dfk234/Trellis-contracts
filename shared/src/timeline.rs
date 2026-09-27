@@ -52,7 +52,10 @@
 
 use soroban_sdk::{contracttype, symbol_short, Address, Bytes, BytesN, Env, Symbol, Vec};
 
-use crate::auth::{has_role, require_role, Role};
+use crate::auth::{
+    has_permission, has_role, require_admin, require_permission, require_role, Permission, Role,
+    KEY_ADMIN,
+};
 use crate::canonical::{canonical_fingerprint, CanonicalPart};
 use crate::errors::Error;
 use crate::storage::{persistent_get, persistent_has, persistent_remove, persistent_set};
@@ -281,7 +284,24 @@ pub enum TimelineKey {
 /// Maintainer status is `Role::Admin` or `Role::Upgrader`, read from on-chain
 /// role storage.
 pub fn is_maintainer(env: &Env, who: &Address) -> bool {
-    has_role(env, who, Role::Admin) || has_role(env, who, Role::Upgrader)
+    has_role(env, who, Role::Admin)
+        || has_role(env, who, Role::Upgrader)
+        || env
+            .storage()
+            .instance()
+            .get::<_, Address>(&KEY_ADMIN)
+            .as_ref()
+            == Some(who)
+}
+
+fn require_audit_reader(env: &Env, maintainer: &Address) -> Result<(), Error> {
+    if has_permission(env, maintainer, Permission::ReadAuditTrail) {
+        require_permission(env, maintainer, Permission::ReadAuditTrail)
+    } else if env.storage().instance().has(&KEY_ADMIN) {
+        require_admin(env, maintainer)
+    } else {
+        Err(Error::Unauthorized)
+    }
 }
 
 /// Builds the [`Viewer`] for `who` by reading their on-chain roles.
@@ -506,7 +526,7 @@ pub fn record_audit_event(
     link: ResourceLink,
     summary: Symbol,
 ) -> Result<AuditEntry, Error> {
-    require_role(env, maintainer, Role::Admin)?;
+    require_audit_reader(env, maintainer)?;
     write_audit_entry(env, maintainer.clone(), event_type, link, summary)
 }
 
@@ -556,7 +576,7 @@ pub fn redact_entry(
     seq: u64,
     reason: Symbol,
 ) -> Result<(), Error> {
-    require_role(env, maintainer, Role::Admin)?;
+    require_audit_reader(env, maintainer)?;
     let mut entry = load_entry(env, seq).ok_or(Error::NotFound)?;
     entry.redacted = true;
     let link = entry.link.clone();

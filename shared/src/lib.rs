@@ -18,7 +18,10 @@ pub mod timeline;
 pub mod utils;
 
 // Re-export the most commonly-needed items at crate root for ergonomic use.
-pub use auth::{get_admin, require_admin, require_not_paused, set_admin};
+pub use auth::{
+    get_admin, has_permission, initialize_admin, require_admin, require_not_paused,
+    require_permission, role_for_permission, set_admin, Permission, Role,
+};
 pub use batch::{
     batch_invoke_no_args, execute_multi_invoke, execute_multi_transfer, multi_transfer_all,
     BatchConfig, BatchError, BatchMode, BatchResult, BatchTransfer, OperationResult,

@@ -137,6 +137,8 @@ testing = { path = "../../testing", features = ["testutils"] }
 
 For the maintainer audit record schema, treasury coverage, and audit-specific
 validation command, see [`docs/AUDIT.md`](docs/AUDIT.md).
+For the on-chain role/capability model and authorization boundaries, see
+[`docs/ACCESS_CONTROL.md`](docs/ACCESS_CONTROL.md).
 
 ---
 

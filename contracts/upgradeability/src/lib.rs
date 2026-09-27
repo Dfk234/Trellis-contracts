@@ -70,6 +70,8 @@ pub enum UpgradeError {
     StorageIncompatible = 909,
     /// The migration hook address is not a valid contract.
     InvalidMigrationHook = 910,
+    /// The registry has already been initialized.
+    AlreadyInitialized = 911,
 }
 
 type ContractResult<T> = core::result::Result<T, UpgradeError>;
@@ -190,20 +192,16 @@ impl UpgradeabilityContract {
     ///
     /// Sets the admin address and grants the `Upgrader` role to the caller.
     pub fn initialize(env: Env, admin: Address) -> Result<(), UpgradeError> {
-        shared::auth::set_admin(&env, &admin);
+        shared::auth::initialize_admin(&env, &admin).map_err(|error| match error {
+            shared::Error::AlreadyInitialized => UpgradeError::AlreadyInitialized,
+            _ => UpgradeError::NotUpgrader,
+        })?;
         // Grant the Upgrader role to admin so they can perform upgrades.
         persistent_set(
             &env,
             &auth::DataKey::Role(admin.clone(), Role::Upgrader),
             &true,
         );
-        // Also grant Admin role for registry management.
-        persistent_set(
-            &env,
-            &auth::DataKey::Role(admin.clone(), Role::Admin),
-            &true,
-        );
-
         events::emit_module_initialized(
             &env,
             symbol_short!("upg_reg"),
@@ -677,15 +675,17 @@ impl UpgradeabilityContract {
 
 /// Requires the caller to hold the `Admin` role.
 fn require_admin_role(env: &Env, caller: &Address) -> ContractResult<()> {
-    auth::require_role(env, caller, Role::Admin).map_err(|e| match e {
-        Error::Unauthorized => UpgradeError::NotUpgrader,
-        _ => UpgradeError::NotUpgrader,
-    })
+    auth::require_permission(env, caller, auth::Permission::ManageConfiguration).map_err(
+        |e| match e {
+            Error::Unauthorized => UpgradeError::NotUpgrader,
+            _ => UpgradeError::NotUpgrader,
+        },
+    )
 }
 
 /// Requires the caller to hold the `Upgrader` role.
 fn require_upgrader_role(env: &Env, caller: &Address) -> ContractResult<()> {
-    auth::require_role(env, caller, Role::Upgrader).map_err(|e| match e {
+    auth::require_permission(env, caller, auth::Permission::UpgradeContracts).map_err(|e| match e {
         Error::Unauthorized => UpgradeError::NotUpgrader,
         _ => UpgradeError::NotUpgrader,
     })

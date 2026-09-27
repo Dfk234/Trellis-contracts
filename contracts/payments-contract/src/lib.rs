@@ -76,7 +76,7 @@ impl ExamplePaymentsContract {
             return Err(Error::PaymentInvalidFeeRate);
         }
 
-        auth::set_admin(&env, &admin);
+        auth::initialize_admin(&env, &admin)?;
         instance_set(&env, &TOKEN, &token);
         instance_set(&env, &FEE_RATE, &fee_rate_bps);
         instance_set(&env, &FEE_RECIPIENT, &fee_recipient);
