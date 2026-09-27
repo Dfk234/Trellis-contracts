@@ -7,6 +7,7 @@ pub mod compat;
 pub mod config;
 pub mod errors;
 pub mod events;
+pub mod idempotency;
 pub mod lifecycle;
 pub mod math;
 pub mod migration;
@@ -25,6 +26,7 @@ pub use batch::{
     ABSOLUTE_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE,
 };
 pub use errors::Error;
+pub use idempotency::{begin as begin_idempotency, complete as complete_idempotency};
 pub use migration::{
     begin_migration, clear_journal, dry_run, evaluate_post_checks, expected_step, fail_migration,
     finish_migration, is_resumable, load_journal, mark_step_complete, resume_index, save_journal,
