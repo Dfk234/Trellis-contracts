@@ -44,9 +44,17 @@ pub enum DataKey {
     /// Configuration marker (instance) - set on initialize.
     Initialized,
     /// Append-only list of aid IDs created by a donor (persistent).
-    DonorIndex(Address),
+    DonorAids(Address),
     /// Append-only list of aid IDs assigned to a recipient (persistent).
     RecipientIndex(Address),
+    /// IDs currently eligible for discovery search. Canonical records remain
+    /// the source of truth; this is a repairable derived index.
+    SearchIndex,
+    /// An additional address permitted to discover a particular aid record.
+    SearchAccess(u64, Address),
+    /// Admin-controlled discovery visibility flag. Missing means visible for
+    /// backwards-compatible records.
+    SearchHidden(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -123,28 +131,76 @@ pub fn set_token(env: &Env, token: &Address) {
 /// The list is append-only: entries are added on `create_aid` and never
 /// removed, so claim/refund transitions only mutate the underlying records,
 /// keeping every index entry valid.
-pub fn get_donor_index(env: &Env, donor: &Address) -> Vec<u64> {
-    persistent_get(env, &DataKey::DonorIndex(donor.clone())).unwrap_or_else(|| Vec::new(env))
+pub fn get_donor_aids(env: &Env, donor: &Address) -> Vec<u64> {
+    persistent_get(env, &DataKey::DonorAids(donor.clone())).unwrap_or_else(|| Vec::new(env))
 }
 
 /// Append `aid_id` to `donor`'s index.
-pub fn append_donor_index(env: &Env, donor: &Address, aid_id: u64) {
-    let mut ids = get_donor_index(env, donor);
+pub fn append_donor_aid(env: &Env, donor: &Address, aid_id: u64) {
+    let mut ids = get_donor_aids(env, donor);
     ids.push_back(aid_id);
-    persistent_set(env, &DataKey::DonorIndex(donor.clone()), &ids);
+    persistent_set(env, &DataKey::DonorAids(donor.clone()), &ids);
 }
 
 /// Read the full list of aid IDs assigned to `recipient`.
-pub fn get_recipient_index(env: &Env, recipient: &Address) -> Vec<u64> {
-    persistent_get(env, &DataKey::RecipientIndex(recipient.clone()))
+pub fn get_recipient_aids(env: &Env, recipient: &Address) -> Vec<u64> {
+    persistent_get(env, &DataKey::RecipientAids(recipient.clone()))
         .unwrap_or_else(|| Vec::new(env))
 }
 
 /// Append `aid_id` to `recipient`'s index.
-pub fn append_recipient_index(env: &Env, recipient: &Address, aid_id: u64) {
-    let mut ids = get_recipient_index(env, recipient);
+pub fn append_recipient_aid(env: &Env, recipient: &Address, aid_id: u64) {
+    let mut ids = get_recipient_aids(env, recipient);
     ids.push_back(aid_id);
-    persistent_set(env, &DataKey::RecipientIndex(recipient.clone()), &ids);
+    persistent_set(env, &DataKey::RecipientAids(recipient.clone()), &ids);
+}
+
+pub fn get_donor_index(env: &Env, donor: &Address) -> Vec<u64> {
+    get_donor_aids(env, donor)
+}
+
+pub fn append_donor_index(env: &Env, donor: &Address, aid_id: u64) {
+    append_donor_aid(env, donor, aid_id);
+}
+
+pub fn get_recipient_index(env: &Env, recipient: &Address) -> Vec<u64> {
+    get_recipient_aids(env, recipient)
+}
+
+pub fn append_recipient_index(env: &Env, recipient: &Address, aid_id: u64) {
+    append_recipient_aid(env, recipient, aid_id);
+}
+
+// ---------------------------------------------------------------------------
+// Permission-aware discovery index
+// ---------------------------------------------------------------------------
+
+pub fn get_search_index(env: &Env) -> Vec<u64> {
+    persistent_get(env, &DataKey::SearchIndex).unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn set_search_index(env: &Env, ids: &Vec<u64>) {
+    persistent_set(env, &DataKey::SearchIndex, ids);
+}
+
+pub fn is_search_hidden(env: &Env, aid_id: u64) -> bool {
+    persistent_get(env, &DataKey::SearchHidden(aid_id)).unwrap_or(false)
+}
+
+pub fn set_search_hidden(env: &Env, aid_id: u64, hidden: bool) {
+    persistent_set(env, &DataKey::SearchHidden(aid_id), &hidden);
+}
+
+pub fn has_search_access(env: &Env, aid_id: u64, viewer: &Address) -> bool {
+    persistent_get(env, &DataKey::SearchAccess(aid_id, viewer.clone())).unwrap_or(false)
+}
+
+pub fn set_search_access(env: &Env, aid_id: u64, viewer: &Address, granted: bool) {
+    persistent_set(
+        env,
+        &DataKey::SearchAccess(aid_id, viewer.clone()),
+        &granted,
+    );
 }
 
 // ---------------------------------------------------------------------------
