@@ -27,6 +27,9 @@ commands, the decision points, and the rollback / mitigation paths.
    # Contract/config diagnostics (RPC reachability, network id, flags).
    ./scripts/diagnostics.sh
 
+   # Cross-contract wiring smoke test (read-only, see §7).
+   ./scripts/verify-deployment.sh "$NETWORK"
+
    # Confirm the deployed network + contract ids recorded at deploy time.
    cat DEPLOYMENTS.md
    ```
@@ -242,3 +245,101 @@ post-incident note: root cause, detection gap, and follow-up issues.
 - [`../UPGRADEABILITY.md`](../UPGRADEABILITY.md) — upgrade registry and rollback.
 - [`../DEPLOYMENTS.md`](../DEPLOYMENTS.md) — deployed contract ids per network.
 - [`../SECURITY.md`](../SECURITY.md) — disclosure and key-compromise steps.
+
+---
+
+## 7. Deployment verification smoke test
+
+After every testnet/mainnet deploy — and before declaring a deployment incident
+resolved — run the cross-contract smoke test. It reads the recorded addresses
+and queries each contract's read-only getters on-chain to prove the deployment
+is wired together. `scripts/deploy.sh` can succeed while a missed
+`scripts/initialize.sh` wiring step leaves claims and payouts failing on-chain;
+this is the one command that catches that.
+
+### 7.1 What it checks
+
+| Check | Getter | Expected |
+|---|---|---|
+| Aid → Treasury | `AidContract::get_treasury` | deployed `treasury-contract` id |
+| Treasury → Referral | `TreasuryContract::referral_contract` | deployed `referral-contract` id |
+| Referral → Treasury | `ReferralContract::get_treasury` | deployed `treasury-contract` id |
+| Registry coverage | `RegistryContract::get_contract(name)` | every deployed contract resolves to its recorded id |
+| Invocation | read-only getter per core contract | contract reachable and callable by the configured source |
+
+The invocation check is a zero-value, read-only simulation (`--send=no`); it
+never signs or submits a state-changing transaction and never moves funds.
+
+### 7.2 Usage
+
+```bash
+# Linux/macOS — run from the repo root
+./scripts/verify-deployment.sh testnet
+
+# Windows / cross-platform Node runner (same checks, same options)
+node scripts/verify-deployment.cjs testnet
+```
+
+Common options (both runners):
+
+| Flag | Purpose |
+|---|---|
+| `--network <net>` | `testnet` (default) or `mainnet` |
+| `--deployments <file>` | Deployment JSON from `deploy.sh` (default `.deployment-log-<net>.json`) |
+| `--deployments-md <file>` | Markdown fallback (default `DEPLOYMENTS.md`) |
+| `--source <identity>` | Soroban source identity (default `admin`) |
+| `--rpc-url <url>` | Override the RPC endpoint |
+| `--registry-name k=sym` | Override the registry `Symbol` checked for contract `k` |
+| `--skip-simulation` | Skip the invocation simulation |
+| `--json` | Machine-readable summary (for CI) |
+
+If the deployment JSON is absent the runner falls back to the network table in
+`DEPLOYMENTS.md`. If neither has addresses it exits `2` with an actionable
+error:
+
+```
+VERIFY ERROR: testnet contracts are not deployed yet (no addresses in ...)
+  Fix: run ./scripts/deploy.sh testnet then ./scripts/record-deployments.sh testnet
+```
+
+### 7.3 Exit codes and output
+
+| Exit | Meaning |
+|---|---|
+| `0` | every check passed |
+| `1` | one or more checks failed (missing or mismatched address) |
+| `2` | could not run (not deployed yet, `soroban`/`jq` missing) |
+
+Every FAIL line names the getter, what it returned, what was expected, and the
+fix — for example:
+
+```
+[FAIL] registry:referral
+       RegistryContract::get_contract(referral) -> C... but Referral Contract is C...;
+       update the registry entry
+```
+
+### 7.4 Registering missing registry entries
+
+The default registry `Symbol` for each contract is its short name (`aid`,
+`treasury`, `referral`, `registry`, `governance`, ...). If the deployment used
+different names, pass `--registry-name <key>=<symbol>`. Register a missing
+entry with:
+
+```bash
+soroban contract invoke \
+  --id "$REGISTRY_ID" --network "$NETWORK" --source admin \
+  -- set_contract --caller admin --name referral \
+     --address "$REFERRAL_ID" --version 1
+```
+
+### 7.5 CI / automation
+
+```bash
+./scripts/verify-deployment.sh testnet --json
+```
+
+prints `{"network":...,"pass":N,"fail":N,"checks":[...]}` and exits non-zero on
+any failure, so it can gate a post-deploy job. It is intentionally **not** part
+of the PR CI job set, because it requires a live network and a funded source
+identity.
