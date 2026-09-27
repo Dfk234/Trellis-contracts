@@ -20,6 +20,7 @@ pub mod retention;
 pub mod storage;
 pub mod timeline;
 pub mod utils;
+pub mod webhook;
 
 // Re-export the most commonly-needed items at crate root for ergonomic use.
 pub use auth::{
