@@ -7,11 +7,14 @@ pub mod compat;
 pub mod config;
 pub mod errors;
 pub mod events;
+pub mod lifecycle;
 pub mod math;
 pub mod migration;
 pub mod payments;
 pub mod quota;
+pub mod retention;
 pub mod storage;
+pub mod timeline;
 pub mod utils;
 pub mod webhook;
 
@@ -44,6 +47,13 @@ pub use quota::{
     check_and_consume, get_quota_config, get_quota_status, get_usage, reset_quota,
     set_quota_config, QuotaConfig, QuotaStatus, QuotaUsage,
 };
+pub use retention::{
+    active_hold, apply_cleanup, class_label, classify, days_to_ledgers, default_policy,
+    get_effective_policy, get_hold, get_record, get_retention_policy, is_frozen, plan_cleanup,
+    plan_cleanup_at, place_hold, put_record, release_hold, set_retention_policy, CleanupEntry,
+    CleanupPlan, CleanupReport, DataClass, HoldReason, RetentionHold, RetentionPolicy,
+    RetentionRecord, HOLD_INDEFINITE, LEDGERS_PER_DAY, MAX_RETAIN_LEDGERS,
+};
 pub use events::{
     emit, emit_collection_registered, emit_nft_auction, emit_nft_bid, emit_nft_listed,
     emit_nft_offer, emit_nft_settle, emit_nft_sold, emit_royalty_paid, AID_CLAIMED, AID_CREATED,
@@ -66,11 +76,14 @@ pub use storage::{
 };
 pub use utils::{is_expired, now};
 
-pub use webhook::{
-    check_timestamp, is_processed, mark_processed, sign_webhook, verify_and_consume,
-    verify_signature, webhook_message, WebhookConfig, WebhookEvent, WebhookKey,
-    MAX_PAYLOAD_BYTES,
+pub use timeline::{
+    anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry, entry_count,
+    entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq, redact_entry,
+    record_audit_event, timeline_page, viewer_for, AuditEntry, ResourceLink, TimelineEntry,
+    TimelineEventType, TimelineKey, TimelinePage, Viewer, Visibility, DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE, MAX_SCAN_PER_PAGE,
 };
+
 pub use canonical::{
     canonical_bytes, canonical_fingerprint, canonicalize_legacy, ensure_supported_encoding,
     is_legacy_encoding, normalize_int, normalize_text, parse_legacy_kv, CanonicalPart,
@@ -80,3 +93,5 @@ pub use canonical::{
 mod test_auth;
 #[cfg(test)]
 mod test_storage;
+#[cfg(test)]
+mod test_timeline;
