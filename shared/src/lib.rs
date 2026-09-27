@@ -7,6 +7,7 @@ pub mod compat;
 pub mod config;
 pub mod errors;
 pub mod events;
+pub mod jobs;
 pub mod math;
 pub mod migration;
 pub mod payments;
@@ -43,6 +44,15 @@ pub use quota::{
     check_and_consume, get_quota_config, get_quota_status, get_usage, reset_quota,
     set_quota_config, QuotaConfig, QuotaStatus, QuotaUsage,
 };
+pub use jobs::{
+    configure_worker, dead_letter_job_ids, default_worker_config, dedupe_key_pair, dedupe_key_u64,
+    discard_dead_letter, enqueue_escrow_refund, enqueue_job, get_job, get_receipt, job_stats,
+    next_due_ledger, pause_worker, pending_job_ids, reprocess_job, requeue_dead_letter,
+    resume_worker, run_due_job, worker_config, EnqueueOutcome, Job, JobCounters, JobError,
+    JobHandler, JobKind, JobPayload, JobReceipt, JobStats, JobStatus, RetryPolicy, RunOutcome,
+    WorkerConfig, WorkerKey, ESCROW_REFUND_TAG, JOB_DEAD_LETTERED, JOB_ENQUEUED, JOB_REQUEUED,
+    JOB_RETRIED, JOB_SUCCEEDED, JOB_TOPIC,
+};
 pub use events::{
     emit, emit_collection_registered, emit_nft_auction, emit_nft_bid, emit_nft_listed,
     emit_nft_offer, emit_nft_settle, emit_nft_sold, emit_royalty_paid, AID_CLAIMED, AID_CREATED,
@@ -72,5 +82,7 @@ pub use canonical::{
 };
 #[cfg(test)]
 mod test_auth;
+#[cfg(test)]
+mod test_jobs;
 #[cfg(test)]
 mod test_storage;
