@@ -76,11 +76,11 @@ pub use storage::{
 pub use utils::{is_expired, now};
 
 pub use timeline::{
-    anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry, entry_count,
-    entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq, redact_entry,
-    record_audit_event, timeline_page, viewer_for, AuditEntry, ResourceLink, TimelineEntry,
-    TimelineEventType, TimelineKey, TimelinePage, Viewer, Visibility, DEFAULT_PAGE_SIZE,
-    MAX_PAGE_SIZE, MAX_SCAN_PER_PAGE,
+    action_audit_trail, anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry,
+    entry_count, entry_exists, entry_is_redacted, is_maintainer, next_audit_seq, next_seq,
+    record_action_audit_event, record_audit_event, redact_entry, timeline_page, viewer_for,
+    ActionAuditEntry, AuditEntry, ResourceLink, TimelineEntry, TimelineEventType, TimelineKey,
+    TimelinePage, Viewer, Visibility, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_SCAN_PER_PAGE,
 };
 
 pub use canonical::{

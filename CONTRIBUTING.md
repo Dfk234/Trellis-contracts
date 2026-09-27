@@ -135,6 +135,9 @@ Add the crate to any contract under test:
 testing = { path = "../../testing", features = ["testutils"] }
 ```
 
+For the maintainer audit record schema, treasury coverage, and audit-specific
+validation command, see [`docs/AUDIT.md`](docs/AUDIT.md).
+
 ---
 
 ## Branch and Commit Conventions

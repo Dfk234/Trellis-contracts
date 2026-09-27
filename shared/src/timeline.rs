@@ -13,6 +13,7 @@
 //! |--------------------|-----------------------|-----------------------------|
 //! | User timeline      | [`append_user_event`] | [`timeline_page`]           |
 //! | Maintainer audit   | [`record_audit_event`]| [`audit_trail`]             |
+//! | Domain action log  | [`record_action_audit_event`]| [`action_audit_trail`] |
 //!
 //! The stores live under different storage keys and have different accessors,
 //! so a maintainer-only entry is structurally incapable of appearing in a
@@ -190,7 +191,7 @@ pub struct AuditEntry {
     pub event_type: TimelineEventType,
     /// The resource it happened to.
     pub link: ResourceLink,
-    /// The maintainer that recorded or performed it.
+    /// The authenticated actor that recorded or performed it.
     pub actor: Address,
     /// Ledger sequence at which it was recorded.
     pub ledger: u32,
@@ -198,6 +199,38 @@ pub struct AuditEntry {
     pub timestamp: u64,
     /// Short label.
     pub summary: Symbol,
+}
+
+/// Versioned, structured audit context for a sensitive domain action.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionAuditEntry {
+    /// Append-only position in the shared audit sequence.
+    pub seq: u64,
+    /// What happened.
+    pub event_type: TimelineEventType,
+    /// The resource it happened to.
+    pub link: ResourceLink,
+    /// The authenticated actor.
+    pub actor: Address,
+    /// Contract or protocol area in which the action occurred.
+    pub scope: Symbol,
+    /// Stable action label; free-form input does not belong in audit records.
+    pub action: Symbol,
+    /// Short, non-sensitive reason code for the action.
+    pub reason: Symbol,
+    /// Public resource address affected by the action, when applicable.
+    pub resource: Option<Address>,
+    /// Stable attribute such as a category or role, when applicable.
+    pub attribute: Option<Symbol>,
+    /// Non-sensitive numeric state immediately before the action, when relevant.
+    pub before: Option<i128>,
+    /// Non-sensitive numeric state immediately after the action, when relevant.
+    pub after: Option<i128>,
+    /// Ledger sequence at which it was recorded.
+    pub ledger: u32,
+    /// Ledger timestamp at which it was recorded.
+    pub timestamp: u64,
 }
 
 /// Who is asking to read a timeline.
@@ -235,6 +268,8 @@ pub enum TimelineKey {
     NextAuditSeq,
     /// Maintainer-only audit entry by `seq`.
     AuditEntry(u64),
+    /// Versioned domain-action audit entry by `seq`.
+    ActionAuditEntry(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +366,10 @@ fn load_audit_entry(env: &Env, seq: u64) -> Option<AuditEntry> {
     persistent_get(env, &TimelineKey::AuditEntry(seq))
 }
 
+fn load_action_audit_entry(env: &Env, seq: u64) -> Option<ActionAuditEntry> {
+    persistent_get(env, &TimelineKey::ActionAuditEntry(seq))
+}
+
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
@@ -414,6 +453,47 @@ fn write_audit_entry(
     Ok(entry)
 }
 
+fn write_action_audit_entry(
+    env: &Env,
+    actor: Address,
+    event_type: TimelineEventType,
+    link: ResourceLink,
+    scope: Symbol,
+    action: Symbol,
+    reason: Symbol,
+    resource: Option<Address>,
+    attribute: Option<Symbol>,
+    before: Option<i128>,
+    after: Option<i128>,
+) -> Result<ActionAuditEntry, Error> {
+    link.anchor(env)?;
+    let entry = ActionAuditEntry {
+        seq: take_audit_seq(env),
+        event_type,
+        link,
+        actor,
+        scope,
+        action,
+        reason,
+        resource,
+        attribute,
+        before,
+        after,
+        ledger: env.ledger().sequence(),
+        timestamp: env.ledger().timestamp(),
+    };
+    persistent_set(env, &TimelineKey::ActionAuditEntry(entry.seq), &entry);
+    env.events().publish(
+        (symbol_short!("timeline"), symbol_short!("audit")),
+        (entry.seq, entry.event_type.clone(), entry.link.clone()),
+    );
+    env.events().publish(
+        (symbol_short!("timeline"), symbol_short!("audit_v2")),
+        entry.clone(),
+    );
+    Ok(entry)
+}
+
 /// Records a maintainer-only audit entry.
 ///
 /// Maintainer-gated: the caller must hold [`Role::Admin`]. Audit entries are
@@ -428,6 +508,41 @@ pub fn record_audit_event(
 ) -> Result<AuditEntry, Error> {
     require_role(env, maintainer, Role::Admin)?;
     write_audit_entry(env, maintainer.clone(), event_type, link, summary)
+}
+
+/// Records an authenticated domain action for maintainer review.
+///
+/// Call only after the domain operation's authorization and validation have
+/// succeeded. The event and state change are committed atomically by Soroban.
+/// Context is limited to stable symbols and optional numeric values so callers
+/// do not persist secrets, free-form payloads, or personal data unnecessarily.
+pub fn record_action_audit_event(
+    env: &Env,
+    actor: &Address,
+    event_type: TimelineEventType,
+    link: ResourceLink,
+    scope: Symbol,
+    action: Symbol,
+    reason: Symbol,
+    resource: Option<Address>,
+    attribute: Option<Symbol>,
+    before: Option<i128>,
+    after: Option<i128>,
+) -> Result<ActionAuditEntry, Error> {
+    actor.require_auth();
+    write_action_audit_entry(
+        env,
+        actor.clone(),
+        event_type,
+        link,
+        scope,
+        action,
+        reason,
+        resource,
+        attribute,
+        before,
+        after,
+    )
 }
 
 /// Hides an entry from every non-maintainer without disturbing ordering.
@@ -569,6 +684,34 @@ pub fn audit_trail(env: &Env, maintainer: &Address, limit: u32) -> Result<Vec<Au
     while seq > 0 && out.len() < limit {
         seq -= 1;
         if let Some(entry) = load_audit_entry(env, seq) {
+            out.push_back(entry);
+        }
+    }
+    Ok(out)
+}
+
+/// Returns structured domain-action records, newest first.
+///
+/// Maintainer-gated and stored separately from the legacy audit-entry schema,
+/// preserving compatibility with audit entries written before structured
+/// action context was added.
+pub fn action_audit_trail(
+    env: &Env,
+    maintainer: &Address,
+    limit: u32,
+) -> Result<Vec<ActionAuditEntry>, Error> {
+    require_role(env, maintainer, Role::Admin)?;
+    let limit = if limit == 0 { DEFAULT_PAGE_SIZE } else { limit };
+    if limit > MAX_PAGE_SIZE {
+        return Err(Error::InvalidArgument);
+    }
+
+    let total = next_audit_seq(env);
+    let mut out = Vec::new(env);
+    let mut seq = total;
+    while seq > 0 && out.len() < limit {
+        seq -= 1;
+        if let Some(entry) = load_action_audit_entry(env, seq) {
             out.push_back(entry);
         }
     }

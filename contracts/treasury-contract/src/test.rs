@@ -40,6 +40,60 @@ fn test_withdraw_success_decrements_balance_and_emits_event() {
     assert_eq!(client.category_balance(&token, &category), 300);
 }
 
+#[test]
+fn sensitive_treasury_actions_are_available_in_the_maintainer_audit_trail() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, _) = setup(&env);
+    let token = Address::generate(&env);
+    let category = symbol_short!("reserve");
+    let recipient = Address::generate(&env);
+
+    client.deposit(&admin, &token, &category, &500);
+    client.withdraw(&admin, &token, &recipient, &200, &category);
+
+    let audit = client.audit_trail(&admin, &10).unwrap();
+    assert_eq!(audit.len(), 3);
+
+    let withdrawal = audit.get(0).unwrap();
+    assert_eq!(withdrawal.actor, admin);
+    assert_eq!(withdrawal.scope, symbol_short!("treasury"));
+    assert_eq!(withdrawal.action, symbol_short!("withdraw"));
+    assert_eq!(withdrawal.reason, symbol_short!("funds_out"));
+    assert_eq!(withdrawal.resource, Some(token.clone()));
+    assert_eq!(withdrawal.attribute, Some(category.clone()));
+    assert_eq!(withdrawal.before, Some(500));
+    assert_eq!(withdrawal.after, Some(300));
+
+    let deposit = audit.get(1).unwrap();
+    assert_eq!(deposit.action, symbol_short!("deposit"));
+    assert_eq!(deposit.resource, Some(token));
+    assert_eq!(deposit.attribute, Some(category));
+    assert_eq!(deposit.before, Some(0));
+    assert_eq!(deposit.after, Some(500));
+
+    let initialization = audit.get(2).unwrap();
+    assert_eq!(initialization.actor, admin);
+    assert_eq!(initialization.action, symbol_short!("init"));
+    assert_eq!(initialization.reason, symbol_short!("setup"));
+    assert_eq!(initialization.after, Some(1_000));
+}
+
+#[test]
+fn initialize_is_one_time_and_requires_the_initial_admin_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let replacement_admin = Address::generate(&env);
+
+    assert_eq!(
+        client.try_initialize(&replacement_admin, &2_000),
+        Err(Ok(Error::AlreadyInitialized))
+    );
+    assert_eq!(client.audit_trail(&admin, &10).unwrap().len(), 1);
+}
+
 // ===========================================================================
 // Multi-token isolation tests
 #[test]

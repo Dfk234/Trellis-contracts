@@ -5,17 +5,18 @@ extern crate std;
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
     testutils::{Address as _, Ledger as _},
-    Address, Bytes, Env, Vec,
+    Address, Bytes, Env, FromVal, IntoVal, Vec,
 };
 
 use crate::{
     auth::{grant_role, set_admin, Role},
     errors::Error,
     timeline::{
-        anonymous_viewer, append_user_event, audit_trail, can_view, delete_entry, entry_count,
-        entry_exists, entry_is_redacted, is_maintainer, record_audit_event, redact_entry,
-        timeline_page, viewer_for, ResourceLink, TimelineEntry, TimelineEventType, Visibility,
-        DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
+        action_audit_trail, anonymous_viewer, append_user_event, audit_trail, can_view,
+        delete_entry, entry_count, entry_exists, entry_is_redacted, is_maintainer,
+        record_action_audit_event, record_audit_event, redact_entry, timeline_page, viewer_for,
+        ResourceLink, TimelineEntry, TimelineEventType, Visibility, DEFAULT_PAGE_SIZE,
+        MAX_PAGE_SIZE,
     },
 };
 
@@ -315,10 +316,57 @@ fn audit_entries_never_appear_in_the_user_timeline() {
 }
 
 #[test]
+fn action_audit_records_actor_scope_reason_timestamp_and_state_context() {
+    let ctx = setup();
+    let entry = ctx.run(|| {
+        record_action_audit_event(
+            &ctx.env,
+            &ctx.alice,
+            TimelineEventType::ConfigChanged,
+            link(&ctx.env, 9, 2),
+            symbol_short!("treasury"),
+            symbol_short!("wd_limit"),
+            symbol_short!("admin_cfg"),
+            None,
+            None,
+            None,
+            None,
+            Some(100),
+            Some(250),
+        )
+        .unwrap()
+    });
+
+    assert_eq!(entry.actor, ctx.alice);
+    assert_eq!(entry.scope, symbol_short!("treasury"));
+    assert_eq!(entry.action, symbol_short!("wd_limit"));
+    assert_eq!(entry.reason, symbol_short!("admin_cfg"));
+    assert_eq!(entry.resource, None);
+    assert_eq!(entry.attribute, None);
+    assert_eq!(entry.before, Some(100));
+    assert_eq!(entry.after, Some(250));
+    assert_eq!(entry.ledger, ctx.env.ledger().sequence());
+    assert_eq!(entry.timestamp, ctx.env.ledger().timestamp());
+    let event = ctx.env.events().all().last().unwrap();
+    assert_eq!(
+        event.1,
+        (symbol_short!("timeline"), symbol_short!("audit_v2")).into_val(&ctx.env)
+    );
+    let event_entry: crate::timeline::ActionAuditEntry = FromVal::from_val(&ctx.env, &event.2);
+    assert_eq!(event_entry, entry);
+    let queried = ctx.run(|| action_audit_trail(&ctx.env, &ctx.admin, 0).unwrap());
+    assert_eq!(queried, soroban_sdk::Vec::from_array(&ctx.env, [entry]));
+}
+
+#[test]
 fn audit_trail_requires_admin_role() {
     let ctx = setup();
     assert_eq!(
         ctx.run(|| audit_trail(&ctx.env, &ctx.stranger, 0)),
+        Err(Error::Unauthorized)
+    );
+    assert_eq!(
+        ctx.run(|| action_audit_trail(&ctx.env, &ctx.stranger, 0)),
         Err(Error::Unauthorized)
     );
     assert_eq!(
