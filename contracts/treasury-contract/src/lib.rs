@@ -223,6 +223,11 @@ impl TreasuryContract {
         let key = (BALANCE, token.clone(), category.clone());
         let balance: i128 = env.storage().instance().get(&key).unwrap_or(0);
         let new_balance = balance.checked_add(amount).ok_or(Error::Overflow)?;
+        token::Client::new(&env, &token).transfer(
+            &caller,
+            &env.current_contract_address(),
+            &amount,
+        );
         env.storage().instance().set(&key, &new_balance);
         record_treasury_audit(
             &env,
@@ -505,11 +510,7 @@ impl TreasuryContract {
     }
 
     /// Inspect quota usage for an actor/resource pair (maintainer diagnostics).
-    pub fn quota_status(
-        env: Env,
-        actor: Address,
-        resource: Symbol,
-    ) -> shared::quota::QuotaStatus {
+    pub fn quota_status(env: Env, actor: Address, resource: Symbol) -> shared::quota::QuotaStatus {
         shared::quota::get_quota_status(&env, &actor, &resource)
     }
 

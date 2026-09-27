@@ -45,7 +45,7 @@ use soroban_sdk::{
 
 use shared::errors::Error;
 use shared::events::{emit_action_executed, emit_module_initialized, emit_permission_changed};
-use shared::storage::persistent_set;
+use shared::storage::{persistent_get, persistent_read, persistent_set};
 
 const MAX_SUPPORTED_TIERS: u32 = 10;
 const MIN_REWARD_CAP: i128 = 0;
@@ -230,15 +230,13 @@ impl ReferralContract {
         require_admin(&env, &caller)?;
         validate_tier_config(&tier_bps, max_tiers, reward_cap)?;
 
-        env.storage().instance().set(&DataKey::MaxTiers, &max_tiers);
-        env.storage()
-            .instance()
-            .set(&DataKey::RewardCap, &reward_cap);
+        persistent_set(&env, &DataKey::MaxTiers, &max_tiers);
+        persistent_set(&env, &DataKey::RewardCap, &reward_cap);
 
         let mut tier = 1_u32;
         while tier <= max_tiers {
             let bps = tier_bps.get(tier - 1).ok_or(Error::InvalidArgument)?;
-            env.storage().instance().set(&DataKey::TierBps(tier), &bps);
+            persistent_set(&env, &DataKey::TierBps(tier), &bps);
             tier += 1;
         }
 
@@ -290,9 +288,7 @@ impl ReferralContract {
             return Err(Error::InvalidArgument);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Referrer(referred_wallet.clone()), &referrer);
+        persistent_set(&env, &DataKey::Referrer(referred_wallet.clone()), &referrer);
         env.events().publish(
             (shared::events::REFERRER_SET,),
             ReferrerSetEvent {
@@ -345,10 +341,7 @@ impl ReferralContract {
             return Err(Error::InvalidArgument);
         }
 
-        // Store the edge in instance storage (for accrue / cycle detection).
-        env.storage()
-            .instance()
-            .set(&DataKey::Referrer(wallet.clone()), &referrer);
+        persistent_set(&env, &DataKey::Referrer(wallet.clone()), &referrer);
 
         // Store the full referral record in persistent storage.
         let record = ReferralRecord {
@@ -466,9 +459,7 @@ impl ReferralContract {
 
         let treasury = read_treasury(&env)?;
         call_treasury_distribute_reward(&env, &treasury, &referrer, amount)?;
-        env.storage()
-            .instance()
-            .set(&DataKey::Accrued(referrer.clone()), &0_i128);
+        persistent_set(&env, &DataKey::Accrued(referrer.clone()), &0_i128);
         env.events().publish(
             (shared::events::COMMISSION_PAID,),
             ClaimRewardsEvent {
@@ -563,49 +554,32 @@ fn read_treasury(env: &Env) -> ContractResult<Address> {
 }
 
 fn read_max_tiers(env: &Env) -> ContractResult<u32> {
-    env.storage()
-        .instance()
-        .get::<DataKey, u32>(&DataKey::MaxTiers)
-        .ok_or(Error::NotFound)
+    persistent_get(env, &DataKey::MaxTiers).ok_or(Error::NotFound)
 }
 
 fn read_reward_cap(env: &Env) -> ContractResult<i128> {
-    env.storage()
-        .instance()
-        .get::<DataKey, i128>(&DataKey::RewardCap)
-        .ok_or(Error::NotFound)
+    persistent_get(env, &DataKey::RewardCap).ok_or(Error::NotFound)
 }
 
 fn read_tier_bps(env: &Env, tier: u32) -> ContractResult<i128> {
-    env.storage()
-        .instance()
-        .get::<DataKey, i128>(&DataKey::TierBps(tier))
-        .ok_or(Error::NotFound)
+    persistent_get(env, &DataKey::TierBps(tier)).ok_or(Error::NotFound)
 }
 
 fn read_referrer(env: &Env, wallet: &Address) -> Option<Address> {
-    env.storage()
-        .instance()
-        .get::<DataKey, Address>(&DataKey::Referrer(wallet.clone()))
+    persistent_get(env, &DataKey::Referrer(wallet.clone()))
 }
 
 /// Read-only query path — skip TTL bump since caller doesn't write back.
 fn read_referral_record(env: &Env, wallet: &Address) -> Option<ReferralRecord> {
-    shared::storage::persistent_read(env, &DataKey::ReferralRecord(wallet.clone()))
+    persistent_read(env, &DataKey::ReferralRecord(wallet.clone()))
 }
 
 fn read_accrued(env: &Env, referrer: &Address) -> i128 {
-    env.storage()
-        .instance()
-        .get::<DataKey, i128>(&DataKey::Accrued(referrer.clone()))
-        .unwrap_or(0)
+    persistent_get(env, &DataKey::Accrued(referrer.clone())).unwrap_or(0)
 }
 
 fn read_lifetime_accrued(env: &Env, referrer: &Address) -> i128 {
-    env.storage()
-        .instance()
-        .get::<DataKey, i128>(&DataKey::LifetimeAccrued(referrer.clone()))
-        .unwrap_or(0)
+    persistent_get(env, &DataKey::LifetimeAccrued(referrer.clone())).unwrap_or(0)
 }
 
 fn credit_referrer(
@@ -640,11 +614,13 @@ fn credit_referrer(
     let new_lifetime_accrued =
         shared::math::safe_add(lifetime_accrued, credited).ok_or(Error::Overflow)?;
 
-    // Batch writes — both entries are always updated together.
-    env.storage()
-        .instance()
-        .set(&DataKey::Accrued(referrer.clone()), &new_accrued_balance);
-    env.storage().instance().set(
+    persistent_set(
+        env,
+        &DataKey::Accrued(referrer.clone()),
+        &new_accrued_balance,
+    );
+    persistent_set(
+        env,
         &DataKey::LifetimeAccrued(referrer.clone()),
         &new_lifetime_accrued,
     );
