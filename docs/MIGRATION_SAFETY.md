@@ -47,6 +47,18 @@ let destructive = report.destructive_steps; // needs approval when > 0
 An invalid plan (bad version range, empty steps, unordered ids) returns
 `plan_valid: false` and the failing `MigrationError` code instead of panicking.
 
+## Data Simulation (Dry Run)
+
+To estimate data impact, use the testing utility `testing::migration::MigrationSimulator`. It helps determine which specific storage records will successfully migrate, which will fail (e.g. data corruption or un-parseable formats), and which require manual handling by administrators.
+
+```rust
+let simulator = MigrationSimulator::new(&env, old_records, migration_fn);
+let report = simulator.run();
+// report.successful, report.failed, report.manual_handling
+```
+
+The simulator enforces read-only verification because it runs entirely in memory or off-chain, performing no irreversible writes to the ledger.
+
 ## Storage Layout Validation & Invariant Pre-flight (Issue #97)
 
 To prevent breaking schema changes from deploying incompatible WASM code and corrupting persistent storage:
