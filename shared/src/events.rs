@@ -33,6 +33,11 @@ pub const PAYMENT_ESCROW_CREATED: Symbol = symbol_short!("pay_esc_c");
 pub const PAYMENT_ESCROW_RELEASED: Symbol = symbol_short!("pay_esc_r");
 pub const PAYMENT_ESCROW_REFUNDED: Symbol = symbol_short!("pay_esc_f");
 
+// Import event topic constants.
+pub const IMPORT_SIMULATED: Symbol = symbol_short!("imp_sim");
+pub const IMPORT_COMMITTED: Symbol = symbol_short!("imp_cmt");
+pub const IMPORT_FAILED: Symbol = symbol_short!("imp_fail");
+
 // Canonical event-logging topic constants.
 pub const EVENT_LOG_INITIALIZED: Symbol = symbol_short!("evt_init");
 pub const EVENT_LOG_ACTION: Symbol = symbol_short!("evt_act");
@@ -621,6 +626,77 @@ pub fn emit_proposal_executed(
     env.events().publish(
         (symbol_short!("proposal"), symbol_short!("executed")),
         (proposal_id, executor.clone(), approval_count, timestamp),
+    );
+}
+
+/// Emits `ImportSimulated`.
+///
+/// Topics: `("import", "sim")`
+/// Data: `(total_rows, create_count, update_count, skip_count, error_count, batch_fingerprint)`
+pub fn emit_import_simulated(
+    env: &Env,
+    total_rows: u32,
+    create_count: u32,
+    update_count: u32,
+    skip_count: u32,
+    error_count: u32,
+    batch_fingerprint: &BytesN<32>,
+) {
+    env.events().publish(
+        (symbol_short!("import"), symbol_short!("sim")),
+        (
+            total_rows,
+            create_count,
+            update_count,
+            skip_count,
+            error_count,
+            batch_fingerprint.clone(),
+        ),
+    );
+}
+
+/// Emits `ImportCommitted`.
+///
+/// Topics: `("import", "commit")`
+/// Data: `(caller, total_rows, create_count, update_count, skip_count, error_count, batch_fingerprint)`
+pub fn emit_import_committed(
+    env: &Env,
+    caller: &Address,
+    total_rows: u32,
+    create_count: u32,
+    update_count: u32,
+    skip_count: u32,
+    error_count: u32,
+    batch_fingerprint: &BytesN<32>,
+) {
+    env.events().publish(
+        (symbol_short!("import"), symbol_short!("commit")),
+        (
+            caller.clone(),
+            total_rows,
+            create_count,
+            update_count,
+            skip_count,
+            error_count,
+            batch_fingerprint.clone(),
+        ),
+    );
+}
+
+/// Emits `ImportFailed`.
+///
+/// Topics: `("import", "failed")`
+/// Data: `(caller, total_rows, error_count, error_code)`
+pub fn emit_import_failed(
+    env: &Env,
+    caller: &Address,
+    total_rows: u32,
+    error_count: u32,
+    error_code: u32,
+) {
+    env.events().publish(
+        (symbol_short!("import"), symbol_short!("failed")),
+        (caller.clone(), total_rows, error_count, error_code),
     );
 }
 

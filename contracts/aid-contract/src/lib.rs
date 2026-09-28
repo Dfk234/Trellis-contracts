@@ -763,6 +763,49 @@ impl AidContract {
             scanned_count: res.scanned_count,
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Bulk Import Pipeline (Issue #37)
+    // -----------------------------------------------------------------------
+
+    /// Dry-run simulation for bulk aid imports.
+    ///
+    /// Performs full validation, duplicate checking, diff calculation, and
+    /// generates rollback guidance without making any persistent storage writes.
+    pub fn import_aids_dry_run(
+        env: Env,
+        items: Vec<shared::import::ImportItem>,
+        config: shared::import::ImportConfig,
+    ) -> Result<shared::import::ImportReport, Error> {
+        let mut dry_config = config;
+        dry_config.dry_run = true;
+        shared::import::dry_run(&env, &items, &dry_config).map_err(|_| Error::InvalidArgument)
+    }
+
+    /// Execute a bulk import of aid records with idempotency and rollback guidance.
+    ///
+    /// Requires authorization from `caller` (donor or administrator).
+    /// Respects the configured execution mode (`AllOrNothing` vs `BestEffort`)
+    /// and duplicate policy (`SkipExisting`, `UpdateExisting`, `RejectDuplicate`).
+    pub fn import_aids(
+        env: Env,
+        caller: Address,
+        items: Vec<shared::import::ImportItem>,
+        config: shared::import::ImportConfig,
+    ) -> Result<shared::import::ImportReport, Error> {
+        caller.require_auth();
+        shared::auth::require_not_paused(&env)?;
+        shared::import::execute_import(&env, &caller, &items, &config)
+            .map_err(|_| Error::InvalidArgument)
+    }
+
+    /// Look up an imported aid record by its external business ID.
+    pub fn get_imported_aid(
+        env: Env,
+        external_id: Bytes,
+    ) -> Option<shared::import::StoredImportRecord> {
+        shared::import::get_imported_record(&env, &external_id)
+    }
 }
 
 fn require_admin(env: &Env, admin: &Address) -> Result<(), AidError> {

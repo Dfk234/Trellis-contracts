@@ -442,3 +442,120 @@ fn test_stable_cursor_pagination_on_aid_contract() {
     assert_eq!(search_page.next_cursor, Some(ids[2]));
 }
 
+#[test]
+fn test_aid_contract_import_dry_run_and_commit() {
+    let fx = setup();
+    let client = AidContractClient::new(&fx.env, &fx.contract_id);
+
+    let ext_1 = Bytes::from_slice(&fx.env, b"AID-EXT-01");
+    let ext_2 = Bytes::from_slice(&fx.env, b"AID-EXT-02");
+
+    let mut items = Vec::new(&fx.env);
+    items.push_back(shared::import::ImportItem {
+        row_id: 0,
+        external_id: Some(ext_1.clone()),
+        recipient: fx.recipient.clone(),
+        amount: 500,
+        expiry: fx.env.ledger().timestamp() + 3600,
+        metadata_hash: None,
+    });
+    items.push_back(shared::import::ImportItem {
+        row_id: 1,
+        external_id: Some(ext_2.clone()),
+        recipient: fx.recipient.clone(),
+        amount: 800,
+        expiry: fx.env.ledger().timestamp() + 7200,
+        metadata_hash: None,
+    });
+
+    let config = shared::import::ImportConfig {
+        dry_run: false,
+        mode: shared::import::ImportMode::AllOrNothing,
+        duplicate_policy: shared::import::DuplicatePolicy::SkipExisting,
+        max_rows: 50,
+    };
+
+    // 1. Dry run via contract entrypoint
+    let dry_report = client.import_aids_dry_run(&items, &config);
+    assert!(dry_report.is_dry_run);
+    assert_eq!(dry_report.total_rows, 2);
+    assert_eq!(dry_report.create_count, 2);
+    assert_eq!(dry_report.error_count, 0);
+
+    // Acceptance criteria check: Dry run performs no persistent writes
+    assert_eq!(client.get_imported_aid(&ext_1), None);
+    assert_eq!(client.get_imported_aid(&ext_2), None);
+
+    // 2. Commit execution via contract entrypoint
+    let commit_report = client.import_aids(&fx.donor, &items, &config);
+    assert!(!commit_report.is_dry_run);
+    assert_eq!(commit_report.create_count, 2);
+    assert_eq!(commit_report.error_count, 0);
+
+    // Verify stored records exist
+    let rec1 = client.get_imported_aid(&ext_1).expect("rec1 should be persisted");
+    assert_eq!(rec1.amount, 500);
+    assert_eq!(rec1.recipient, fx.recipient);
+
+    let rec2 = client.get_imported_aid(&ext_2).expect("rec2 should be persisted");
+    assert_eq!(rec2.amount, 800);
+
+    // 3. Acceptance criteria check: Repeated imports are idempotent where external IDs are present
+    let rerun_report = client.import_aids(&fx.donor, &items, &config);
+    assert_eq!(rerun_report.create_count, 0);
+    assert_eq!(rerun_report.skip_count, 2);
+    assert_eq!(rerun_report.update_count, 0);
+    assert_eq!(rerun_report.error_count, 0);
+}
+
+#[test]
+fn test_aid_contract_import_partial_failure_handling() {
+    let fx = setup();
+    let client = AidContractClient::new(&fx.env, &fx.contract_id);
+
+    let ext_good = Bytes::from_slice(&fx.env, b"AID-GOOD");
+    let ext_bad = Bytes::from_slice(&fx.env, b"AID-BAD");
+
+    let mut items = Vec::new(&fx.env);
+    items.push_back(shared::import::ImportItem {
+        row_id: 0,
+        external_id: Some(ext_good.clone()),
+        recipient: fx.recipient.clone(),
+        amount: 300,
+        expiry: fx.env.ledger().timestamp() + 5000,
+        metadata_hash: None,
+    });
+    items.push_back(shared::import::ImportItem {
+        row_id: 1,
+        external_id: Some(ext_bad.clone()),
+        recipient: fx.recipient.clone(),
+        amount: 0, // Invalid amount: triggers row failure
+        expiry: fx.env.ledger().timestamp() + 5000,
+        metadata_hash: None,
+    });
+
+    let config = shared::import::ImportConfig {
+        dry_run: false,
+        mode: shared::import::ImportMode::BestEffort,
+        duplicate_policy: shared::import::DuplicatePolicy::SkipExisting,
+        max_rows: 50,
+    };
+
+    let report = client.import_aids(&fx.donor, &items, &config);
+    assert_eq!(report.total_rows, 2);
+    assert_eq!(report.create_count, 1);
+    assert_eq!(report.error_count, 1);
+    assert_eq!(report.errors.len(), 1);
+
+    // Check error details and rollback guidance
+    let err = report.errors.get(0).unwrap();
+    assert_eq!(err.row_id, 1);
+    assert_eq!(err.reason, symbol_short!("zero_amt"));
+    assert_eq!(report.rollback_guidance.strategy, shared::import::RollbackStrategy::ForwardFix);
+    assert_eq!(report.rollback_guidance.action, symbol_short!("part_fix"));
+
+    // Valid row is committed, invalid row is not
+    assert!(client.get_imported_aid(&ext_good).is_some());
+    assert!(client.get_imported_aid(&ext_bad).is_none());
+}
+

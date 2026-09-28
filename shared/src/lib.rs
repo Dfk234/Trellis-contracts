@@ -12,6 +12,7 @@ pub mod disclosure;
 pub mod errors;
 pub mod error_taxonomy;
 pub mod events;
+pub mod feature_flags;
 // `health`, `reconciliation` and `telemetry` are re-exported below
 // (`pub use health::{...}` etc.) but were never declared as modules here —
 // a build break on `upstream/main` for anything that depends on this crate
@@ -19,6 +20,9 @@ pub mod events;
 // compile error, not a lint. See issue #125's PR for how this surfaced: it
 // couldn't be verified without the workspace building at all.
 pub mod health;
+pub mod history;
+pub mod idempotency;
+pub mod import;
 pub mod jobs;
 pub mod lifecycle;
 pub mod math;
@@ -97,7 +101,8 @@ pub use events::{
     CONTRACT_UPGRADED, PARAMETER_CHANGED, PAYMENT_ESCROW_CREATED, PAYMENT_ESCROW_REFUNDED,
     PAYMENT_ESCROW_RELEASED, PAYMENT_FEE, PAYMENT_TRANSFER, REFERRAL_ACCRUED, REFERRAL_REGISTERED,
     REFERRER_SET, TIER_CONFIG_SET, TREASURY_DEPOSIT, TREASURY_EMERGENCY_WITHDRAW, TREASURY_SET,
-    TREASURY_WITHDRAW,
+    TREASURY_WITHDRAW, emit_import_committed, emit_import_failed, emit_import_simulated,
+    IMPORT_COMMITTED, IMPORT_FAILED, IMPORT_SIMULATED,
 };
 pub use health::{
     get_dependency_health, list_dependency_health, set_dependency_health, DependencyHealth,
@@ -162,6 +167,13 @@ pub use client::{
     CreateProposalRequest, EscrowSummaryResponse, ListingSummaryResponse, OperationStatus,
     ProposalSummaryResponse, RebalanceRequest, RebalanceSummaryResponse, CLIENT_SCHEMA_VERSION,
 };
+pub use import::{
+    compute_batch_fingerprint, dry_run as dry_run_import, execute_import,
+    generate_rollback_guidance, get_import_counter, get_imported_record, has_imported_record,
+    validate_config as validate_import_config, DuplicatePolicy, ImportError, ImportConfig,
+    ImportItem, ImportMode, ImportReport, RollbackGuidance, RowError, StoredImportRecord,
+    ABSOLUTE_MAX_IMPORT_SIZE, DEFAULT_MAX_IMPORT_SIZE, MAX_EXTERNAL_ID_LEN,
+};
 
 #[cfg(test)]
 mod test_reconciliation;
@@ -182,3 +194,5 @@ mod test_sanitize;
 mod test_pagination;
 #[cfg(test)]
 mod test_client;
+#[cfg(test)]
+mod test_import;
