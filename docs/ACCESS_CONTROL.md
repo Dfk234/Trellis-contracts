@@ -27,6 +27,38 @@ End users are authorized by ownership and signature, not by a global role that
 would grant access to other users' records. A contract may use `EndUser` for an
 additional allowlist policy, but must still check resource ownership.
 
+## Permission matrix
+
+Every privileged access-control entry point maps to one row of the matrix in
+`contracts/access-control/src/permissions.rs`. `policy_for` is the
+single-source-of-truth table; `require_action` is the only guard an entry point
+uses, so a new privileged action adds a row rather than a new bespoke check.
+
+| Action | Capability (`shared::auth::Permission`) | Scope | Entry points |
+|---|---|---|---|
+| `ManageMaintainers` | `ManageRoles` | Global | `add_admin`, `remove_admin` |
+| `ConfigureRoleRegistry` | `ManageConfiguration` | Global | `create_role`, `set_role_parent` |
+| `AssignRoles` | `ManageRoles` | Global | `grant_role`, `revoke_role` |
+| `InviteMember(role)` | `ManageRoles` | Role-scoped to `role` | `create_invitation` |
+| `CancelInvitation(inviter)` | `ManageRoles` | Owner-scoped to `inviter` | `revoke_invitation` |
+| `ReadAuditTrail` | `ReadAuditTrail` | Global | `audit_trail` |
+
+Scope narrows authority beyond the role:
+
+- **Global** actions require maintainer authority: the contract's admin
+  registry, or the shared capability model (which also honours the
+  stored-admin fallback).
+- **Role-scoped** actions are satisfied by a maintainer, or by a holder of the
+  named role. That is why a role's members can invite into their own role but
+  cannot invite into a role they do not hold.
+- **Owner-scoped** actions are satisfied by a maintainer, or by the address
+  that owns the record (the original inviter). A peer holding the same role
+  cannot cancel someone else's invitation.
+
+A caller outside a global action's authority is rejected with
+`AccessControlError::NotAdmin`; a caller outside a role- or owner-scoped
+action's breadth is rejected with `AccessControlError::RoleEscalation`.
+
 Admin is the maintainer super-role; the specialized manager roles provide
 delegation for non-admin accounts. Admin does not imply `ServiceActor` or
 `OracleSigner`, which remain explicitly registered. The stored-admin fallback
@@ -59,9 +91,13 @@ are migrated.
 
 ```bash
 cargo test -p shared auth
+cargo test -p access-control
 cargo test -p treasury-contract
 ```
 
 The shared auth tests cover every permission-to-role mapping and denial after
-revocation. Treasury contract tests cover authorized service payouts and reject
-an unregistered contract actor.
+revocation. The access-control tests cover the permission matrix itself: each
+action's capability and scope must match its row, a maintainer satisfies every
+action, an outsider is denied every global action, and role- and owner-scoped
+actions stop at the edge of their scope. Treasury contract tests cover
+authorized service payouts and reject an unregistered contract actor.
