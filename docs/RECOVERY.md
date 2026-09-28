@@ -88,3 +88,7 @@ cargo test -p shared recovery
 The suite covers interruption before (`open_operation` + first step), during
 (`fail_step` on an external step, then `resume`), and after (idempotent
 re-completion, `abandon`, reopen) external side effects.
+
+## Restore Validation
+
+For checking invariants after a restore or migration, see [Restore Validation](RESTORE_VALIDATION.md).
