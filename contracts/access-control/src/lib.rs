@@ -21,6 +21,11 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 
+mod permissions;
+pub use permissions::{
+    has_action_permission, policy_for, require_action, Action, ActionPolicy, ActionScope,
+};
+
 // ---------------------------------------------------------------------------
 // Error codes — extend the shared error space starting at 200
 // ---------------------------------------------------------------------------
@@ -191,6 +196,13 @@ impl AccessControlContract {
         maintainer: Address,
         limit: u32,
     ) -> Result<Vec<shared::ActionAuditEntry>, shared::Error> {
+        // Reading maintainer-only audit records is a privileged action; the
+        // matrix authorizes the caller before the shared accessor repeats the
+        // admin check (and performs the authorization, so it is not repeated
+        // here).
+        if !has_action_permission(&env, &maintainer, &Action::ReadAuditTrail) {
+            return Err(shared::Error::Unauthorized);
+        }
         shared::timeline::action_audit_trail(&env, &maintainer, limit)
     }
 
@@ -200,8 +212,7 @@ impl AccessControlContract {
         caller: Address,
         new_admin: Address,
     ) -> Result<(), AccessControlError> {
-        require_admin(&env, &caller)?;
-        caller.require_auth();
+        require_action(&env, &caller, &Action::ManageMaintainers)?;
 
         let mut admins: Map<Address, bool> = env
             .storage()
@@ -261,8 +272,7 @@ impl AccessControlContract {
         caller: Address,
         target: Address,
     ) -> Result<(), AccessControlError> {
-        require_admin(&env, &caller)?;
-        caller.require_auth();
+        require_action(&env, &caller, &Action::ManageMaintainers)?;
 
         let super_admin_addr: Address = env
             .storage()
@@ -313,8 +323,7 @@ impl AccessControlContract {
 
     /// Create a new role.  Admin-gated.
     pub fn create_role(env: Env, caller: Address, role: Symbol) -> Result<(), AccessControlError> {
-        require_admin(&env, &caller)?;
-        caller.require_auth();
+        require_action(&env, &caller, &Action::ConfigureRoleRegistry)?;
 
         validate_role_symbol(&role)?;
 
@@ -358,8 +367,7 @@ impl AccessControlContract {
         role: Symbol,
         parent: Symbol,
     ) -> Result<(), AccessControlError> {
-        require_admin(&env, &caller)?;
-        caller.require_auth();
+        require_action(&env, &caller, &Action::ConfigureRoleRegistry)?;
 
         ensure_role_exists(&env, &role)?;
         ensure_role_exists(&env, &parent)?;
@@ -414,8 +422,7 @@ impl AccessControlContract {
         role: Symbol,
         user: Address,
     ) -> Result<(), AccessControlError> {
-        require_admin(&env, &caller)?;
-        caller.require_auth();
+        require_action(&env, &caller, &Action::AssignRoles)?;
 
         ensure_role_exists(&env, &role)?;
 
@@ -446,8 +453,7 @@ impl AccessControlContract {
         role: Symbol,
         user: Address,
     ) -> Result<(), AccessControlError> {
-        require_admin(&env, &caller)?;
-        caller.require_auth();
+        require_action(&env, &caller, &Action::AssignRoles)?;
 
         ensure_role_exists(&env, &role)?;
 
@@ -489,16 +495,11 @@ impl AccessControlContract {
         invitee: Address,
         ttl_ledgers: u64,
     ) -> Result<(), AccessControlError> {
-        caller.require_auth();
         ensure_role_exists(&env, &role)?;
 
-        if role_exists(&env, &role) {
-            // Verify caller has the role (or is admin) to prevent role escalation.
-            let is_adm = is_admin_internal(&env, &caller);
-            if !is_adm && !has_role_recursive(&env, &role, &caller) {
-                return Err(AccessControlError::RoleEscalation);
-            }
-        }
+        // Role-scoped: a maintainer, or a holder of `role`, may invite.
+        // The permission matrix owns the escalation check.
+        require_action(&env, &caller, &Action::InviteMember(role.clone()))?;
 
         // Rate limiting
         let current_time = env.ledger().timestamp();
@@ -588,15 +589,11 @@ impl AccessControlContract {
         role: Symbol,
         invitee: Address,
     ) -> Result<(), AccessControlError> {
-        caller.require_auth();
-        
         let key = DataKey::Invitation(invitee.clone(), role.clone());
         if let Some(inv) = env.storage().instance().get::<DataKey, Invitation>(&key) {
-            let is_adm = is_admin_internal(&env, &caller);
-            if !is_adm && inv.inviter != caller {
-                return Err(AccessControlError::RoleEscalation); // Or unauthorized
-            }
-            
+            // Owner-scoped: a maintainer, or the original inviter, may cancel.
+            require_action(&env, &caller, &Action::CancelInvitation(inv.inviter.clone()))?;
+
             env.storage().instance().remove(&key);
             record_access_audit(
                 &env,
@@ -745,13 +742,11 @@ fn grant_role_internal(env: &Env, role: &Symbol, user: &Address) {
     }
 }
 
+/// Returns `true` when `user` holds `role` directly (ignoring ancestors).
 fn has_direct_role(env: &Env, role: &Symbol, user: &Address) -> bool {
-    let members: Map<Address, bool> = env
-        .storage()
-        .instance()
-        .get(&DataKey::RoleMembers(role.clone()))
-        .unwrap_or_else(|| Map::new(env));
-    members.get(user.clone()).unwrap_or(false)
+    // Memberships are stored as individual `DataKey::RoleMember(role, user)`
+    // entries, so a direct check is a single entry lookup.
+    role_member(env, role, user)
 }
 
 /// Revoke `role` from `user` — sets membership to false (soft-delete).
@@ -762,7 +757,7 @@ fn revoke_role_internal(env: &Env, role: &Symbol, user: &Address) {
 }
 
 /// Recursively check if `user` holds `role` (directly or via ancestors).
-fn has_role_recursive(env: &Env, role: &Symbol, user: &Address) -> bool {
+pub(crate) fn has_role_recursive(env: &Env, role: &Symbol, user: &Address) -> bool {
     // Direct membership check.
     if role_member(env, role, user) {
         return true;
@@ -807,28 +802,14 @@ fn has_ancestor(env: &Env, role: &Symbol, ancestor_candidate: &Symbol) -> bool {
     }
 }
 
-fn is_admin_internal(env: &Env, caller: &Address) -> bool {
+/// Returns `true` when `caller` is registered in this contract's admin map.
+pub(crate) fn is_admin_internal(env: &Env, caller: &Address) -> bool {
     let admins: Map<Address, bool> = env
         .storage()
         .instance()
         .get(&DataKey::Admins)
         .unwrap_or_else(|| Map::new(env));
     admins.get(caller.clone()).unwrap_or(false)
-}
-
-/// Verify that `caller` is a registered admin.  Returns `NotAdmin` on failure.
-fn require_admin(env: &Env, caller: &Address) -> ContractResult<()> {
-    let admins: Map<Address, bool> = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admins)
-        .unwrap_or_else(|| Map::new(env));
-
-    if admins.get(caller.clone()).unwrap_or(false) {
-        Ok(())
-    } else {
-        Err(AccessControlError::NotAdmin)
-    }
 }
 
 fn record_access_audit(
@@ -872,7 +853,7 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
     use soroban_sdk::{Env, IntoVal};
 
     // -----------------------------------------------------------------------
@@ -886,10 +867,6 @@ mod tests {
         let contract_id = env.register_contract(None, AccessControlContract);
         let client = AccessControlContractClient::new(&env, &contract_id);
         client.initialize(&super_admin);
-
-        // Re-create client bound to the registered id so internal state
-        // persists.
-        let client = AccessControlContractClient::new(&env, &contract_id);
         (env, super_admin, contract_id)
     }
 
@@ -923,7 +900,7 @@ mod tests {
         client.create_role(&super_admin, &role);
         client.grant_role(&super_admin, &role, &user);
 
-        let audit = client.audit_trail(&super_admin, &10).unwrap();
+        let audit = client.audit_trail(&super_admin, &10);
         assert_eq!(audit.get(0).unwrap().actor, super_admin);
         assert_eq!(audit.get(0).unwrap().scope, symbol_short!("access"));
         assert_eq!(audit.get(0).unwrap().action, symbol_short!("role_grt"));
