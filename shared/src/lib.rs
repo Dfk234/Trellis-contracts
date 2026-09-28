@@ -33,6 +33,7 @@ pub mod policy;
 pub mod quota;
 pub mod reconciliation;
 pub mod recovery;
+pub mod replay;
 pub mod retention;
 pub mod sanitize;
 pub mod semantic;
@@ -161,11 +162,12 @@ pub use pagination::{
     paginate_id_list, paginate_id_range, Direction, PageRequest, PageResponse, DEFAULT_MAX_SCAN,
     DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT,
 };
+pub use replay::{consume_payload, ReplayKey, SignedPayload};
 pub use client::{
     client_schema_fingerprint, format_client_error, AidSummaryResponse, ClientErrorResponse,
     ClientReceipt, CreateAidRequest, CreateEscrowRequest, CreateListingRequest,
-    CreateProposalRequest, EscrowSummaryResponse, ListingSummaryResponse, OperationStatus,
-    ProposalSummaryResponse, RebalanceRequest, RebalanceSummaryResponse, CLIENT_SCHEMA_VERSION,
+    CreateProposalRequest, EscrowSummaryResponse, ListingSummaryResponse, ProposalSummaryResponse,
+    RebalanceRequest, RebalanceSummaryResponse, CLIENT_SCHEMA_VERSION, OperationStatus,
 };
 pub use import::{
     compute_batch_fingerprint, dry_run as dry_run_import, execute_import,
@@ -177,6 +179,9 @@ pub use import::{
 
 #[cfg(test)]
 mod test_reconciliation;
+
+#[cfg(test)]
+mod test_replay;
 
 #[cfg(test)]
 mod test_disclosure;
