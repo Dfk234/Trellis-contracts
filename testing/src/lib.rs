@@ -13,6 +13,7 @@ pub mod mocks;
 pub mod sandbox;
 pub mod simulation;
 pub mod upgrade;
+pub mod migration;
 
 pub use fuzzing::*;
 pub use helpers::*;
@@ -20,3 +21,4 @@ pub use mocks::*;
 pub use sandbox::*;
 pub use simulation::*;
 pub use upgrade::*;
+pub use migration::*;
