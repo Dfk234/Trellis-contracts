@@ -112,6 +112,8 @@ pub enum Error {
     PaymentFeeOverflow = 709,
     /// The escrow ID counter has overflowed.
     PaymentEscrowIdOverflow = 710,
+    /// The token is not supported by this payment gateway.
+    PaymentTokenNotSupported = 711,
 
     // ── NFT Marketplace errors (1000–1008) ──────────────────────────────
     /// The NFT listing was not found.

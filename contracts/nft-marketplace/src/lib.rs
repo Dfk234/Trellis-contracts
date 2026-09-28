@@ -19,6 +19,7 @@
 #![no_std]
 #![allow(clippy::too_many_arguments)]
 
+#[cfg(test)]
 extern crate std;
 
 use soroban_sdk::{

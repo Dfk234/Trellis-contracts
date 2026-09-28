@@ -1,10 +1,11 @@
-use soroban_sdk::{symbol_short, Address, Env, Map, Symbol, Vec};
 use crate::types::{FeedLatest, PriceSubmission, SubmitterInfo};
 use shared::storage::{persistent_get, persistent_set};
+use soroban_sdk::{symbol_short, Address, Env, Map, Symbol, Vec};
 
 // Storage key symbols (all <= 9 chars for symbol_short!)
 const KEY_SUBMITTERS: Symbol = symbol_short!("submits");
 const KEY_FEED_LATEST: Symbol = symbol_short!("feed_lat");
+const KEY_FEED_ACTIVE: Symbol = symbol_short!("feed_act");
 const KEY_FEED_HISTORY: Symbol = symbol_short!("feed_his");
 const KEY_NEXT_SUBMISSION_ID: Symbol = symbol_short!("sub_id");
 const KEY_NONCE: Symbol = symbol_short!("nonce");
@@ -82,18 +83,37 @@ pub fn set_feed_latest(env: &Env, feed_id: &Symbol, latest: &FeedLatest) {
     env.storage().instance().set(&KEY_FEED_LATEST, &feeds);
 }
 
+/// Get the latest active submission per submitter for a feed.
+pub fn get_feed_active_submissions(env: &Env, feed_id: &Symbol) -> Map<Address, PriceSubmission> {
+    let feeds: Map<Symbol, Map<Address, PriceSubmission>> = env
+        .storage()
+        .instance()
+        .get(&KEY_FEED_ACTIVE)
+        .unwrap_or_else(|| Map::new(env));
+    feeds.get(feed_id.clone()).unwrap_or_else(|| Map::new(env))
+}
+
+/// Record the latest active submission for the submitting address.
+pub fn set_feed_active_submission(env: &Env, feed_id: &Symbol, submission: &PriceSubmission) {
+    let mut feeds: Map<Symbol, Map<Address, PriceSubmission>> = env
+        .storage()
+        .instance()
+        .get(&KEY_FEED_ACTIVE)
+        .unwrap_or_else(|| Map::new(env));
+    let mut submitter_prices = feeds.get(feed_id.clone()).unwrap_or_else(|| Map::new(env));
+    submitter_prices.set(submission.submitter.clone(), submission.clone());
+    feeds.set(feed_id.clone(), submitter_prices);
+    env.storage().instance().set(&KEY_FEED_ACTIVE, &feeds);
+}
+
 /// Get submission history for a feed (limited to most recent N submissions).
 pub fn get_feed_history(env: &Env, feed_id: &Symbol, limit: u32) -> Vec<PriceSubmission> {
-    let history: Map<Symbol, Vec<PriceSubmission>> = persistent_get(env, &KEY_FEED_HISTORY)
-        .unwrap_or_else(|| Map::new(env));
-    
+    let history: Map<Symbol, Vec<PriceSubmission>> =
+        persistent_get(env, &KEY_FEED_HISTORY).unwrap_or_else(|| Map::new(env));
+
     if let Some(submissions) = history.get(feed_id.clone()) {
         let len = submissions.len() as u32;
-        let start = if len > limit {
-            (len - limit) as u32
-        } else {
-            0
-        };
+        let start = if len > limit { (len - limit) as u32 } else { 0 };
         let mut result = Vec::new(env);
         let mut i = start;
         while i < submissions.len() {
@@ -110,10 +130,12 @@ pub fn get_feed_history(env: &Env, feed_id: &Symbol, limit: u32) -> Vec<PriceSub
 
 /// Append a submission to the history for a feed.
 pub fn append_submission(env: &Env, feed_id: &Symbol, submission: &PriceSubmission) {
-    let mut history: Map<Symbol, Vec<PriceSubmission>> = persistent_get(env, &KEY_FEED_HISTORY)
-        .unwrap_or_else(|| Map::new(env));
-    
-    let mut submissions = history.get(feed_id.clone()).unwrap_or_else(|| Vec::new(env));
+    let mut history: Map<Symbol, Vec<PriceSubmission>> =
+        persistent_get(env, &KEY_FEED_HISTORY).unwrap_or_else(|| Map::new(env));
+
+    let mut submissions = history
+        .get(feed_id.clone())
+        .unwrap_or_else(|| Vec::new(env));
     submissions.push_back(submission.clone());
     history.set(feed_id.clone(), submissions);
     persistent_set(env, &KEY_FEED_HISTORY, &history);

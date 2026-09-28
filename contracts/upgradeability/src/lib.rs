@@ -39,6 +39,7 @@ use shared::storage::{instance_get, instance_has, instance_remove, instance_set,
 const MAX_VERSION_NAME_LEN: usize = 64;
 #[allow(dead_code)]
 const MAX_MIGRATION_NOTE_LEN: usize = 256;
+const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 48 * 60 * 60;
 
 // ---------------------------------------------------------------------------
 // Error codes — extend the shared error space for upgradeability
@@ -88,6 +89,7 @@ const KEY_HOOK: Symbol = symbol_short!("mig_hook");
 const KEY_HISTORY: Symbol = symbol_short!("upg_hist");
 const KEY_PENDING: Symbol = symbol_short!("upg_pend");
 const KEY_CONTRACT_BY_NAME: Symbol = symbol_short!("crt_name");
+const KEY_TIMELOCK_DELAY: Symbol = symbol_short!("upg_dly");
 
 // ---------------------------------------------------------------------------
 // Types
@@ -141,6 +143,8 @@ pub struct UpgradeProposal {
     pub executed: bool,
     /// Timestamp when the proposal was created.
     pub created_at: u64,
+    /// Earliest ledger timestamp at which execution is allowed.
+    pub eta: u64,
     /// Timestamp when the proposal was executed (0 if pending).
     pub executed_at: u64,
 }
@@ -210,6 +214,25 @@ impl UpgradeabilityContract {
             env.ledger().timestamp(),
         );
         Ok(())
+    }
+
+    /// Update the mandatory timelock delay for future upgrade proposals.
+    pub fn set_timelock_delay(
+        env: Env,
+        caller: Address,
+        delay_seconds: u64,
+    ) -> Result<(), UpgradeError> {
+        require_admin_role(&env, &caller)?;
+        if delay_seconds == 0 {
+            return Err(UpgradeError::InvalidTimelockDelay);
+        }
+        instance_set(&env, &KEY_TIMELOCK_DELAY, &delay_seconds);
+        Ok(())
+    }
+
+    /// Return the configured timelock delay in seconds.
+    pub fn get_timelock_delay(env: Env) -> u64 {
+        instance_get(&env, &KEY_TIMELOCK_DELAY).unwrap_or(DEFAULT_TIMELOCK_DELAY_SECONDS)
     }
 
     // -----------------------------------------------------------------------
@@ -400,6 +423,13 @@ impl UpgradeabilityContract {
         let proposal_id: u64 = instance_get(&env, &KEY_PROP_CNT).unwrap_or(0) + 1;
         instance_set(&env, &KEY_PROP_CNT, &proposal_id);
 
+        let created_at = env.ledger().timestamp();
+        let timelock_delay =
+            instance_get(&env, &KEY_TIMELOCK_DELAY).unwrap_or(DEFAULT_TIMELOCK_DELAY_SECONDS);
+        let eta = created_at
+            .checked_add(timelock_delay)
+            .ok_or(UpgradeError::InvalidTimelockDelay)?;
+
         let proposal = UpgradeProposal {
             id: proposal_id,
             contract_id: contract_id.clone(),
@@ -408,21 +438,15 @@ impl UpgradeabilityContract {
             note: note.clone(),
             proposer: caller.clone(),
             executed: false,
-            created_at: env.ledger().timestamp(),
+            created_at,
+            eta,
             executed_at: 0,
         };
 
         instance_set(&env, &(KEY_UPG_PROP, proposal_id), &proposal);
         instance_set(&env, &(KEY_PENDING, contract_id.clone()), &proposal_id);
 
-        events::emit_upgrade_proposed(
-            &env,
-            proposal_id,
-            &contract_id,
-            new_version,
-            &caller,
-            env.ledger().timestamp(),
-        );
+        events::emit_upgrade_proposed(&env, proposal_id, &contract_id, new_version, &caller, eta);
         Ok(proposal_id)
     }
 
@@ -446,6 +470,9 @@ impl UpgradeabilityContract {
 
         if proposal.executed {
             return Err(UpgradeError::AlreadyExecuted);
+        }
+        if env.ledger().timestamp() < proposal.eta {
+            return Err(UpgradeError::TimelockNotExpired);
         }
 
         // Get the registry entry.
@@ -650,6 +677,9 @@ impl UpgradeabilityContract {
         if proposal.new_wasm_hash != new_wasm_hash {
             return Err(UpgradeError::InvalidWasmHash);
         }
+        if env.ledger().timestamp() < proposal.eta {
+            return Err(UpgradeError::TimelockNotExpired);
+        }
 
         Ok(proposal.new_wasm_hash)
     }
@@ -713,8 +743,7 @@ fn execute_validate_storage_hook(
     hook_addr: &Address,
     target: &Address,
 ) -> Result<(), UpgradeError> {
-    let args: soroban_sdk::Vec<Val> =
-        soroban_sdk::Vec::from_array(env, [target.to_val()]);
+    let args: soroban_sdk::Vec<Val> = soroban_sdk::Vec::from_array(env, [target.to_val()]);
     let result = env.try_invoke_contract::<(), Error>(
         hook_addr,
         &Symbol::new(env, "validate_storage"),
@@ -787,7 +816,7 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger};
     use soroban_sdk::{Env, IntoVal};
 
     /// Creates a test environment with an initialized UpgradeabilityContract.
@@ -811,6 +840,13 @@ mod tests {
         let mut buf = [0u8; 32];
         buf[0] = seed;
         BytesN::from_array(env, &buf)
+    }
+
+    fn advance_to_eta(env: &Env, client: &UpgradeabilityContractClient, proposal_id: u64) {
+        let proposal = client.get_proposal(&proposal_id);
+        env.ledger().with_mut(|ledger| {
+            ledger.timestamp = proposal.eta;
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -994,6 +1030,29 @@ mod tests {
         assert_eq!(proposal.new_version, 2);
         assert_eq!(proposal.new_wasm_hash, wasm_v2);
         assert!(!proposal.executed);
+        assert_eq!(
+            proposal.eta,
+            proposal.created_at + DEFAULT_TIMELOCK_DELAY_SECONDS
+        );
+    }
+
+    #[test]
+    fn set_timelock_delay_updates_future_proposals() {
+        let (env, contract_id, admin) = setup();
+        let client = client_for(&env, &contract_id);
+        let target = Address::generate(&env);
+        let wasm_v1 = fake_hash(&env, 1);
+        let wasm_v2 = fake_hash(&env, 2);
+
+        client.set_timelock_delay(&admin, &600);
+        client.register_contract(&admin, &target, &symbol_short!("aid"), &1, &wasm_v1);
+
+        let note = soroban_sdk::String::from_str(&env, "short delay");
+        let proposal_id = client.propose_upgrade(&admin, &target, &wasm_v2, &2, &note);
+        let proposal = client.get_proposal(&proposal_id);
+
+        assert_eq!(client.get_timelock_delay(), 600);
+        assert_eq!(proposal.eta, proposal.created_at + 600);
     }
 
     #[test]
@@ -1102,6 +1161,7 @@ mod tests {
         let note = soroban_sdk::String::from_str(&env, "v2");
         let proposal_id = client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
 
+        advance_to_eta(&env, &client, proposal_id);
         client.execute_upgrade(&admin, &proposal_id);
 
         // Verify the registry was updated.
@@ -1130,6 +1190,7 @@ mod tests {
         let note = soroban_sdk::String::from_str(&env, "v2");
         let proposal_id = client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
 
+        advance_to_eta(&env, &client, proposal_id);
         client.execute_upgrade(&admin, &proposal_id);
 
         let history = client.get_upgrade_history(&contract_id, &10);
@@ -1140,6 +1201,23 @@ mod tests {
         assert_eq!(record.old_wasm_hash, wasm_v1);
         assert_eq!(record.new_wasm_hash, wasm_v2);
         assert_eq!(record.executor, admin);
+    }
+
+    #[test]
+    fn execute_before_timelock_fails() {
+        let (env, contract_id, admin) = setup();
+        let client = client_for(&env, &contract_id);
+        let contract_id = Address::generate(&env);
+        let wasm_v1 = fake_hash(&env, 1);
+        let wasm_v2 = fake_hash(&env, 2);
+
+        client.register_contract(&admin, &contract_id, &symbol_short!("aid"), &1, &wasm_v1);
+
+        let note = soroban_sdk::String::from_str(&env, "v2");
+        let proposal_id = client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
+
+        let result = client.try_execute_upgrade(&admin, &proposal_id);
+        assert_eq!(result, Err(Ok(UpgradeError::TimelockNotExpired)));
     }
 
     #[test]
@@ -1155,6 +1233,7 @@ mod tests {
         let note = soroban_sdk::String::from_str(&env, "v2");
         let proposal_id = client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
 
+        advance_to_eta(&env, &client, proposal_id);
         client.execute_upgrade(&admin, &proposal_id);
 
         let result = client.try_execute_upgrade(&admin, &proposal_id);
@@ -1257,6 +1336,7 @@ mod tests {
         let note = soroban_sdk::String::from_str(&env, "v2");
         let proposal_id = client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
 
+        advance_to_eta(&env, &client, proposal_id);
         client.execute_upgrade(&admin, &proposal_id);
 
         let result = client.try_cancel_proposal(&admin, &proposal_id);
@@ -1278,8 +1358,9 @@ mod tests {
         client.register_contract(&admin, &contract_id, &symbol_short!("aid"), &1, &wasm_v1);
 
         let note = soroban_sdk::String::from_str(&env, "v2");
-        client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
+        let proposal_id = client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
 
+        advance_to_eta(&env, &client, proposal_id);
         let result = client.verify_upgrade_authorization(&contract_id, &admin, &wasm_v2);
         assert_eq!(result, wasm_v2);
     }
@@ -1296,10 +1377,28 @@ mod tests {
         client.register_contract(&admin, &contract_id, &symbol_short!("aid"), &1, &wasm_v1);
 
         let note = soroban_sdk::String::from_str(&env, "v2");
-        client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
+        let proposal_id = client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
 
+        advance_to_eta(&env, &client, proposal_id);
         let result = client.try_verify_upgrade_authorization(&contract_id, &admin, &wasm_wrong);
         assert_eq!(result, Err(Ok(UpgradeError::InvalidWasmHash)));
+    }
+
+    #[test]
+    fn verify_upgrade_authorization_before_timelock_fails() {
+        let (env, contract_id, admin) = setup();
+        let client = client_for(&env, &contract_id);
+        let contract_id = Address::generate(&env);
+        let wasm_v1 = fake_hash(&env, 1);
+        let wasm_v2 = fake_hash(&env, 2);
+
+        client.register_contract(&admin, &contract_id, &symbol_short!("aid"), &1, &wasm_v1);
+
+        let note = soroban_sdk::String::from_str(&env, "v2");
+        client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
+
+        let result = client.try_verify_upgrade_authorization(&contract_id, &admin, &wasm_v2);
+        assert_eq!(result, Err(Ok(UpgradeError::TimelockNotExpired)));
     }
 
     #[test]
@@ -1449,6 +1548,7 @@ mod tests {
         let note = soroban_sdk::String::from_str(&env, "v2");
         let proposal_id = client.propose_upgrade(&admin, &contract_id, &wasm_v2, &2, &note);
 
+        advance_to_eta(&env, &client, proposal_id);
         client.execute_upgrade(&admin, &proposal_id);
 
         let all_events = env.events().all();
@@ -1616,11 +1716,17 @@ mod tests {
     #[contractimpl]
     impl MockValidationHook {
         pub fn init(env: Env, compatible: bool) {
-            env.storage().instance().set(&symbol_short!("compat"), &compatible);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("compat"), &compatible);
         }
 
         pub fn validate_storage(env: Env, _target: Address) -> Result<(), Error> {
-            let compatible: bool = env.storage().instance().get(&symbol_short!("compat")).unwrap_or(true);
+            let compatible: bool = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("compat"))
+                .unwrap_or(true);
             if compatible {
                 Ok(())
             } else {
@@ -1645,7 +1751,13 @@ mod tests {
         let hook_client = MockValidationHookClient::new(&env, &hook_addr);
         hook_client.init(&true);
 
-        client.register_contract(&admin, &target_contract, &symbol_short!("treasury"), &1, &fake_hash(&env, 1));
+        client.register_contract(
+            &admin,
+            &target_contract,
+            &symbol_short!("treasury"),
+            &1,
+            &fake_hash(&env, 1),
+        );
         client.set_migration_hook(&admin, &target_contract, &hook_addr);
 
         let note = soroban_sdk::String::from_str(&env, "valid layout upgrade");
@@ -1663,11 +1775,18 @@ mod tests {
         let hook_client = MockValidationHookClient::new(&env, &hook_addr);
         hook_client.init(&false);
 
-        client.register_contract(&admin, &target_contract, &symbol_short!("treasury"), &1, &fake_hash(&env, 1));
+        client.register_contract(
+            &admin,
+            &target_contract,
+            &symbol_short!("treasury"),
+            &1,
+            &fake_hash(&env, 1),
+        );
         client.set_migration_hook(&admin, &target_contract, &hook_addr);
 
         let note = soroban_sdk::String::from_str(&env, "breaking layout change");
-        let result = client.try_propose_upgrade(&admin, &target_contract, &fake_hash(&env, 2), &2, &note);
+        let result =
+            client.try_propose_upgrade(&admin, &target_contract, &fake_hash(&env, 2), &2, &note);
         assert_eq!(result, Err(Ok(UpgradeError::StorageIncompatible)));
     }
 }

@@ -40,6 +40,9 @@ use shared::events::emit_module_initialized;
 use shared::{record_action_audit_event, ResourceLink, TimelineEventType};
 use types::{FeedLatest, PriceSubmission};
 
+const MAX_FUTURE_SKEW_SECS: u64 = 60;
+const MIN_PRICE_QUORUM: u32 = 2;
+
 #[cfg(test)]
 mod tests;
 
@@ -159,10 +162,16 @@ impl OracleContract {
             return Err(OracleError::DuplicateSubmission);
         }
 
-        // Staleness check: ensure timestamp is recent
+        // Staleness check: ensure timestamp is neither stale nor too far ahead.
         let current_time = env.ledger().timestamp();
         let staleness_window = storage::get_staleness_window(&env);
-        if current_time > timestamp + staleness_window {
+        if timestamp > current_time.saturating_add(MAX_FUTURE_SKEW_SECS) {
+            return Err(OracleError::SubmissionFromFuture);
+        }
+        let expires_at = timestamp
+            .checked_add(staleness_window)
+            .ok_or(OracleError::SubmissionStale)?;
+        if current_time > expires_at {
             return Err(OracleError::SubmissionStale);
         }
 
@@ -180,18 +189,12 @@ impl OracleContract {
 
         // Store submission
         storage::append_submission(&env, &feed_id, &submission);
+        storage::set_feed_active_submission(&env, &feed_id, &submission);
 
-        // Update latest value
-        let latest = FeedLatest {
-            feed_id: feed_id.clone(),
-            price,
-            decimals,
-            timestamp,
-            submission_count: storage::get_feed_latest(&env, &feed_id)
-                .map(|f| f.submission_count + 1)
-                .unwrap_or(1),
-        };
-        storage::set_feed_latest(&env, &feed_id, &latest);
+        if let Some(latest) = aggregate_feed_latest(&env, &feed_id, current_time, staleness_window)
+        {
+            storage::set_feed_latest(&env, &feed_id, &latest);
+        }
 
         // Update nonce
         storage::set_nonce(&env, &submitter, &feed_id, nonce);
@@ -213,10 +216,11 @@ impl OracleContract {
         feed_id: Symbol,
         limit: u32,
     ) -> Result<soroban_sdk::Vec<PriceSubmission>, OracleError> {
-        if storage::get_feed_latest(&env, &feed_id).is_none() {
+        let history = storage::get_feed_history(&env, &feed_id, limit);
+        if history.len() == 0 {
             return Err(OracleError::FeedNotFound);
         }
-        Ok(storage::get_feed_history(&env, &feed_id, limit))
+        Ok(history)
     }
 
     /// Set the staleness window (admin only).
@@ -245,5 +249,83 @@ impl OracleContract {
     /// Get the admin address.
     pub fn get_admin(env: Env) -> Address {
         shared::auth::get_admin(&env)
+    }
+}
+
+fn aggregate_feed_latest(
+    env: &Env,
+    feed_id: &Symbol,
+    current_time: u64,
+    staleness_window: u64,
+) -> Option<FeedLatest> {
+    let active = storage::get_feed_active_submissions(env, feed_id);
+    let mut prices = Vec::new(env);
+    let mut decimals: Option<u32> = None;
+    let mut newest_timestamp = 0_u64;
+
+    for (_, submission) in active.iter() {
+        if !storage::is_submitter_active(env, &submission.submitter) {
+            continue;
+        }
+        let Some(expires_at) = submission.timestamp.checked_add(staleness_window) else {
+            continue;
+        };
+        if submission.timestamp > current_time.saturating_add(MAX_FUTURE_SKEW_SECS)
+            || current_time > expires_at
+        {
+            continue;
+        }
+        if let Some(expected_decimals) = decimals {
+            if submission.decimals != expected_decimals {
+                continue;
+            }
+        } else {
+            decimals = Some(submission.decimals);
+        }
+        if submission.timestamp > newest_timestamp {
+            newest_timestamp = submission.timestamp;
+        }
+        prices.push_back(submission.price);
+    }
+
+    if prices.len() < MIN_PRICE_QUORUM {
+        return None;
+    }
+
+    sort_prices(&mut prices);
+    let mid = prices.len() / 2;
+    let price = if prices.len() % 2 == 1 {
+        prices.get(mid).unwrap()
+    } else {
+        let low = prices.get(mid - 1).unwrap();
+        let high = prices.get(mid).unwrap();
+        low.checked_add(high)?.checked_div(2)?
+    };
+
+    Some(FeedLatest {
+        feed_id: feed_id.clone(),
+        price,
+        decimals: decimals.unwrap_or(0),
+        timestamp: newest_timestamp,
+        submission_count: prices.len() as u64,
+    })
+}
+
+fn sort_prices(prices: &mut Vec<i128>) {
+    let len = prices.len();
+    let mut i = 1;
+    while i < len {
+        let mut j = i;
+        while j > 0 {
+            let left = prices.get(j - 1).unwrap();
+            let right = prices.get(j).unwrap();
+            if left <= right {
+                break;
+            }
+            prices.set(j - 1, right);
+            prices.set(j, left);
+            j -= 1;
+        }
+        i += 1;
     }
 }

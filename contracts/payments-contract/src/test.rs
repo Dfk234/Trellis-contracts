@@ -75,10 +75,10 @@ fn deposit_credits_balance() {
     let user = Address::generate(&fx.env);
     mint_tokens(&fx.env, &fx.token_addr, &user, 1_000);
 
-    fx.client.deposit(&user, &500);
+    fx.client.deposit(&user, &fx.token_addr, &500);
 
-    assert_eq!(fx.client.balance_of(&user), 500);
-    assert_eq!(fx.client.total_deposits(), 500);
+    assert_eq!(fx.client.balance_of(&user, &fx.token_addr), 500);
+    assert_eq!(fx.client.total_deposits(&fx.token_addr), 500);
 }
 
 #[test]
@@ -87,11 +87,11 @@ fn deposit_multiple_times_accumulates() {
     let user = Address::generate(&fx.env);
     mint_tokens(&fx.env, &fx.token_addr, &user, 2_000);
 
-    fx.client.deposit(&user, &300);
-    fx.client.deposit(&user, &200);
+    fx.client.deposit(&user, &fx.token_addr, &300);
+    fx.client.deposit(&user, &fx.token_addr, &200);
 
-    assert_eq!(fx.client.balance_of(&user), 500);
-    assert_eq!(fx.client.total_deposits(), 500);
+    assert_eq!(fx.client.balance_of(&user, &fx.token_addr), 500);
+    assert_eq!(fx.client.total_deposits(&fx.token_addr), 500);
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn deposit_rejects_zero_amount() {
     let fx = setup();
     let user = Address::generate(&fx.env);
 
-    let result = fx.client.try_deposit(&user, &0);
+    let result = fx.client.try_deposit(&user, &fx.token_addr, &0);
     assert_eq!(result, Err(Ok(Error::PaymentInvalidAmount)));
 }
 
@@ -108,7 +108,7 @@ fn deposit_rejects_negative_amount() {
     let fx = setup();
     let user = Address::generate(&fx.env);
 
-    let result = fx.client.try_deposit(&user, &-100);
+    let result = fx.client.try_deposit(&user, &fx.token_addr, &-100);
     assert_eq!(result, Err(Ok(Error::PaymentInvalidAmount)));
 }
 
@@ -120,10 +120,41 @@ fn total_deposits_tracks_all_users() {
     mint_tokens(&fx.env, &fx.token_addr, &user1, 1_000);
     mint_tokens(&fx.env, &fx.token_addr, &user2, 1_000);
 
-    fx.client.deposit(&user1, &300);
-    fx.client.deposit(&user2, &700);
+    fx.client.deposit(&user1, &fx.token_addr, &300);
+    fx.client.deposit(&user2, &fx.token_addr, &700);
 
-    assert_eq!(fx.client.total_deposits(), 1_000);
+    assert_eq!(fx.client.total_deposits(&fx.token_addr), 1_000);
+}
+
+#[test]
+fn deposits_are_isolated_by_supported_token() {
+    let fx = setup();
+    let second_token = fx.env.register_stellar_asset_contract(fx.admin.clone());
+    let second_client = token::Client::new(&fx.env, &second_token);
+    let user = Address::generate(&fx.env);
+    mint_tokens(&fx.env, &fx.token_addr, &user, 1_000);
+    mint_tokens(&fx.env, &second_token, &user, 2_000);
+
+    fx.client.add_supported_token(&fx.admin, &second_token);
+    fx.client.deposit(&user, &fx.token_addr, &400);
+    fx.client.deposit(&user, &second_token, &900);
+
+    assert_eq!(fx.client.balance_of(&user, &fx.token_addr), 400);
+    assert_eq!(fx.client.balance_of(&user, &second_token), 900);
+    assert_eq!(fx.client.total_deposits(&fx.token_addr), 400);
+    assert_eq!(fx.client.total_deposits(&second_token), 900);
+    assert_eq!(second_client.balance(&fx.contract_id), 900);
+}
+
+#[test]
+fn deposit_rejects_unsupported_token() {
+    let fx = setup();
+    let unsupported = fx.env.register_stellar_asset_contract(fx.admin.clone());
+    let user = Address::generate(&fx.env);
+    mint_tokens(&fx.env, &unsupported, &user, 1_000);
+
+    let result = fx.client.try_deposit(&user, &unsupported, &500);
+    assert_eq!(result, Err(Ok(Error::PaymentTokenNotSupported)));
 }
 
 // ---------------------------------------------------------------------------
@@ -136,15 +167,15 @@ fn withdraw_sends_tokens_with_fee() {
     let user = Address::generate(&fx.env);
     mint_tokens(&fx.env, &fx.token_addr, &user, 1_000);
 
-    fx.client.deposit(&user, &1_000);
-    assert_eq!(fx.client.balance_of(&user), 1_000);
+    fx.client.deposit(&user, &fx.token_addr, &1_000);
+    assert_eq!(fx.client.balance_of(&user, &fx.token_addr), 1_000);
 
     let fee_recipient = fx.client.fee_recipient().unwrap();
-    let net = fx.client.withdraw(&user);
+    let net = fx.client.withdraw(&user, &fx.token_addr);
 
     // 250 bps = 2.5% fee on 1_000 = 25. Net = 975.
     assert_eq!(net, 975);
-    assert_eq!(fx.client.balance_of(&user), 0);
+    assert_eq!(fx.client.balance_of(&user, &fx.token_addr), 0);
     assert_eq!(fx.token_client.balance(&user), 975);
     assert_eq!(fx.token_client.balance(&fee_recipient), 25);
 }
@@ -155,11 +186,11 @@ fn withdraw_clears_total_deposits() {
     let user = Address::generate(&fx.env);
     mint_tokens(&fx.env, &fx.token_addr, &user, 1_000);
 
-    fx.client.deposit(&user, &1_000);
-    assert_eq!(fx.client.total_deposits(), 1_000);
+    fx.client.deposit(&user, &fx.token_addr, &1_000);
+    assert_eq!(fx.client.total_deposits(&fx.token_addr), 1_000);
 
-    fx.client.withdraw(&user);
-    assert_eq!(fx.client.total_deposits(), 0);
+    fx.client.withdraw(&user, &fx.token_addr);
+    assert_eq!(fx.client.total_deposits(&fx.token_addr), 0);
 }
 
 #[test]
@@ -167,7 +198,7 @@ fn withdraw_rejects_zero_balance() {
     let fx = setup();
     let user = Address::generate(&fx.env);
 
-    let result = fx.client.try_withdraw(&user);
+    let result = fx.client.try_withdraw(&user, &fx.token_addr);
     assert_eq!(result, Err(Ok(Error::PaymentInsufficientBalance)));
 }
 
@@ -177,13 +208,13 @@ fn withdraw_amount_partial() {
     let user = Address::generate(&fx.env);
     mint_tokens(&fx.env, &fx.token_addr, &user, 1_000);
 
-    fx.client.deposit(&user, &1_000);
-    let net = fx.client.withdraw_amount(&user, &400);
+    fx.client.deposit(&user, &fx.token_addr, &1_000);
+    let net = fx.client.withdraw_amount(&user, &fx.token_addr, &400);
 
     // 2.5% fee on 400 = 10. Net = 390.
     assert_eq!(net, 390);
-    assert_eq!(fx.client.balance_of(&user), 600);
-    assert_eq!(fx.client.total_deposits(), 600);
+    assert_eq!(fx.client.balance_of(&user, &fx.token_addr), 600);
+    assert_eq!(fx.client.total_deposits(&fx.token_addr), 600);
 }
 
 #[test]
@@ -192,8 +223,8 @@ fn withdraw_amount_rejects_over_balance() {
     let user = Address::generate(&fx.env);
     mint_tokens(&fx.env, &fx.token_addr, &user, 1_000);
 
-    fx.client.deposit(&user, &500);
-    let result = fx.client.try_withdraw_amount(&user, &600);
+    fx.client.deposit(&user, &fx.token_addr, &500);
+    let result = fx.client.try_withdraw_amount(&user, &fx.token_addr, &600);
     assert_eq!(result, Err(Ok(Error::PaymentInsufficientBalance)));
 }
 
@@ -209,9 +240,9 @@ fn escrow_create_and_release() {
     mint_tokens(&fx.env, &fx.token_addr, &depositor, 5_000);
 
     let expiry = fx.env.ledger().sequence() + 100;
-    let escrow_id = fx
-        .client
-        .create_escrow_entry(&depositor, &beneficiary, &2_000, &expiry);
+    let escrow_id =
+        fx.client
+            .create_escrow_entry(&depositor, &beneficiary, &fx.token_addr, &2_000, &expiry);
 
     assert_eq!(escrow_id, 1);
 
@@ -231,9 +262,9 @@ fn escrow_create_and_refund() {
     mint_tokens(&fx.env, &fx.token_addr, &depositor, 5_000);
 
     let expiry = fx.env.ledger().sequence() + 100;
-    let escrow_id = fx
-        .client
-        .create_escrow_entry(&depositor, &beneficiary, &2_000, &expiry);
+    let escrow_id =
+        fx.client
+            .create_escrow_entry(&depositor, &beneficiary, &fx.token_addr, &2_000, &expiry);
 
     fx.client.refund_escrow_entry(&fx.admin, &escrow_id);
     assert_eq!(fx.token_client.balance(&depositor), 5_000);
@@ -251,9 +282,9 @@ fn escrow_release_requires_admin() {
     mint_tokens(&fx.env, &fx.token_addr, &depositor, 5_000);
 
     let expiry = fx.env.ledger().sequence() + 100;
-    let escrow_id = fx
-        .client
-        .create_escrow_entry(&depositor, &beneficiary, &2_000, &expiry);
+    let escrow_id =
+        fx.client
+            .create_escrow_entry(&depositor, &beneficiary, &fx.token_addr, &2_000, &expiry);
 
     let result = fx.client.try_release_escrow_entry(&non_admin, &escrow_id);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
@@ -267,9 +298,9 @@ fn escrow_release_after_expiry_fails() {
     mint_tokens(&fx.env, &fx.token_addr, &depositor, 5_000);
 
     let expiry = fx.env.ledger().sequence() + 5;
-    let escrow_id = fx
-        .client
-        .create_escrow_entry(&depositor, &beneficiary, &2_000, &expiry);
+    let escrow_id =
+        fx.client
+            .create_escrow_entry(&depositor, &beneficiary, &fx.token_addr, &2_000, &expiry);
 
     // Advance past expiry
     fx.env.ledger().with_mut(|l| {
@@ -322,9 +353,9 @@ fn withdraw_with_zero_fee() {
 
     // Set fee to 0
     fx.client.set_fee_rate(&fx.admin, &0);
-    fx.client.deposit(&user, &1_000);
+    fx.client.deposit(&user, &fx.token_addr, &1_000);
 
-    let net = fx.client.withdraw(&user);
+    let net = fx.client.withdraw(&user, &fx.token_addr);
     assert_eq!(net, 1_000);
     assert_eq!(fx.token_client.balance(&user), 1_000);
     assert_eq!(fx.token_client.balance(&fee_recipient), 0);
