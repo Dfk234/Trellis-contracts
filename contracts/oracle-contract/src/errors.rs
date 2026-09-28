@@ -25,4 +25,8 @@ pub enum OracleError {
     Unauthorized = 508,
     /// A generic error occurred.
     InternalError = 509,
+    /// The submission timestamp is too far in the future.
+    SubmissionFromFuture = 510,
+    /// The feed does not have enough active submitters for aggregation.
+    QuorumNotMet = 511,
 }

@@ -35,6 +35,7 @@ const FEE_RATE: Symbol = symbol_short!("fee_rt");
 const FEE_RECIPIENT: Symbol = symbol_short!("fee_rcp");
 const DEPOSITED: Symbol = symbol_short!("depos");
 const TOTAL_DEPOSITS: Symbol = symbol_short!("t_depo");
+const SUPPORTED_TOKEN: Symbol = symbol_short!("sup_tok");
 
 // ===========================================================================
 // Types
@@ -78,6 +79,7 @@ impl ExamplePaymentsContract {
 
         auth::set_admin(&env, &admin);
         instance_set(&env, &TOKEN, &token);
+        instance_set(&env, &(SUPPORTED_TOKEN, token.clone()), &true);
         instance_set(&env, &FEE_RATE, &fee_rate_bps);
         instance_set(&env, &FEE_RECIPIENT, &fee_recipient);
         instance_set(&env, &TOTAL_DEPOSITS, &0_i128);
@@ -126,6 +128,25 @@ impl ExamplePaymentsContract {
         instance_get(&env, &FEE_RECIPIENT)
     }
 
+    /// Add a token to the supported-token whitelist. Admin only.
+    pub fn add_supported_token(env: Env, caller: Address, token: Address) -> Result<(), Error> {
+        auth::require_admin(&env, &caller)?;
+        instance_set(&env, &(SUPPORTED_TOKEN, token), &true);
+        Ok(())
+    }
+
+    /// Remove a token from the supported-token whitelist. Admin only.
+    pub fn remove_supported_token(env: Env, caller: Address, token: Address) -> Result<(), Error> {
+        auth::require_admin(&env, &caller)?;
+        instance_set(&env, &(SUPPORTED_TOKEN, token), &false);
+        Ok(())
+    }
+
+    /// Returns true when a token is whitelisted for deposits and payouts.
+    pub fn is_supported_token(env: Env, token: Address) -> bool {
+        instance_get(&env, &(SUPPORTED_TOKEN, token)).unwrap_or(false)
+    }
+
     // -----------------------------------------------------------------------
     // Deposits
     // -----------------------------------------------------------------------
@@ -134,12 +155,11 @@ impl ExamplePaymentsContract {
     ///
     /// The caller must have pre-authorised this contract.  The deposited
     /// amount is tracked and credited to the caller's internal balance.
-    pub fn deposit(env: Env, from: Address, amount: i128) -> Result<(), Error> {
+    pub fn deposit(env: Env, from: Address, token: Address, amount: i128) -> Result<(), Error> {
         if amount <= 0 {
             return Err(Error::PaymentInvalidAmount);
         }
-
-        let token: Address = instance_get(&env, &TOKEN).ok_or(Error::NotFound)?;
+        require_supported_token(&env, &token)?;
 
         // Transfer tokens from the depositor into this contract.
         let deposit_client = soroban_sdk::token::Client::new(&env, &token);
@@ -147,35 +167,36 @@ impl ExamplePaymentsContract {
         deposit_client.transfer(&from, &env.current_contract_address(), &amount);
 
         // Update internal accounting.
-        let key = (DEPOSITED, from.clone());
+        let key = (DEPOSITED, from.clone(), token.clone());
         let balance: i128 = instance_get(&env, &key).unwrap_or(0);
         let new_balance = balance.checked_add(amount).ok_or(Error::Overflow)?;
         instance_set(&env, &key, &new_balance);
 
-        let total: i128 = instance_get(&env, &TOTAL_DEPOSITS).unwrap_or(0);
+        let total_key = (TOTAL_DEPOSITS, token.clone());
+        let total: i128 = instance_get(&env, &total_key).unwrap_or(0);
         instance_set(
             &env,
-            &TOTAL_DEPOSITS,
+            &total_key,
             &total.checked_add(amount).ok_or(Error::Overflow)?,
         );
 
         shared::events::emit(
             &env,
             shared::TREASURY_DEPOSIT,
-            (symbol_short!("default"), from, amount, new_balance),
+            (symbol_short!("token"), from, token, amount, new_balance),
         );
 
         Ok(())
     }
 
     /// Returns the internal balance for `who`.
-    pub fn balance_of(env: Env, who: Address) -> i128 {
-        instance_get(&env, &(DEPOSITED, who)).unwrap_or(0)
+    pub fn balance_of(env: Env, who: Address, token: Address) -> i128 {
+        instance_get(&env, &(DEPOSITED, who, token)).unwrap_or(0)
     }
 
-    /// Returns total deposits across all users.
-    pub fn total_deposits(env: Env) -> i128 {
-        instance_get(&env, &TOTAL_DEPOSITS).unwrap_or(0)
+    /// Returns total deposits across all users for a token.
+    pub fn total_deposits(env: Env, token: Address) -> i128 {
+        instance_get(&env, &(TOTAL_DEPOSITS, token)).unwrap_or(0)
     }
 
     // -----------------------------------------------------------------------
@@ -187,15 +208,16 @@ impl ExamplePaymentsContract {
     /// The contract holds the tokens, so the fee and net transfers are both
     /// pull-based: the contract sends the fee to `fee_recipient` and the
     /// net to `who`.
-    pub fn withdraw(env: Env, who: Address) -> Result<i128, Error> {
+    pub fn withdraw(env: Env, who: Address, token: Address) -> Result<i128, Error> {
         who.require_auth();
+        require_supported_token(&env, &token)?;
 
-        let deposited: i128 = instance_get(&env, &(DEPOSITED, who.clone())).unwrap_or(0);
+        let deposited: i128 =
+            instance_get(&env, &(DEPOSITED, who.clone(), token.clone())).unwrap_or(0);
         if deposited <= 0 {
             return Err(Error::PaymentInsufficientBalance);
         }
 
-        let token: Address = instance_get(&env, &TOKEN).ok_or(Error::NotFound)?;
         let fee_rate: i128 = instance_get(&env, &FEE_RATE).unwrap_or(0);
         let fee_recipient_addr: Address =
             instance_get(&env, &FEE_RECIPIENT).ok_or(Error::NotFound)?;
@@ -214,38 +236,41 @@ impl ExamplePaymentsContract {
         }
 
         // Clear the depositor's internal balance.
-        instance_set(&env, &(DEPOSITED, who.clone()), &0_i128);
+        instance_set(&env, &(DEPOSITED, who.clone(), token.clone()), &0_i128);
 
         // Decrement total deposits.
-        let total: i128 = instance_get(&env, &TOTAL_DEPOSITS).unwrap_or(0);
-        instance_set(
-            &env,
-            &TOTAL_DEPOSITS,
-            &total.checked_sub(deposited).unwrap_or(0),
-        );
+        let total_key = (TOTAL_DEPOSITS, token.clone());
+        let total: i128 = instance_get(&env, &total_key).unwrap_or(0);
+        instance_set(&env, &total_key, &total.checked_sub(deposited).unwrap_or(0));
 
         shared::events::emit(
             &env,
             shared::TREASURY_WITHDRAW,
-            (symbol_short!("default"), who, deposited, net),
+            (symbol_short!("token"), who, token, deposited, net),
         );
 
         Ok(net)
     }
 
     /// Withdraw a specific amount, deducting a fee.
-    pub fn withdraw_amount(env: Env, who: Address, amount: i128) -> Result<i128, Error> {
+    pub fn withdraw_amount(
+        env: Env,
+        who: Address,
+        token: Address,
+        amount: i128,
+    ) -> Result<i128, Error> {
         if amount <= 0 {
             return Err(Error::PaymentInvalidAmount);
         }
         who.require_auth();
+        require_supported_token(&env, &token)?;
 
-        let deposited: i128 = instance_get(&env, &(DEPOSITED, who.clone())).unwrap_or(0);
+        let deposited: i128 =
+            instance_get(&env, &(DEPOSITED, who.clone(), token.clone())).unwrap_or(0);
         if amount > deposited {
             return Err(Error::PaymentInsufficientBalance);
         }
 
-        let token: Address = instance_get(&env, &TOKEN).ok_or(Error::NotFound)?;
         let fee_rate: i128 = instance_get(&env, &FEE_RATE).unwrap_or(0);
         let fee_recipient_addr: Address =
             instance_get(&env, &FEE_RECIPIENT).ok_or(Error::NotFound)?;
@@ -265,15 +290,12 @@ impl ExamplePaymentsContract {
 
         // Decrement internal balance.
         let new_balance = deposited - amount;
-        instance_set(&env, &(DEPOSITED, who.clone()), &new_balance);
+        instance_set(&env, &(DEPOSITED, who.clone(), token.clone()), &new_balance);
 
         // Decrement total deposits.
-        let total: i128 = instance_get(&env, &TOTAL_DEPOSITS).unwrap_or(0);
-        instance_set(
-            &env,
-            &TOTAL_DEPOSITS,
-            &total.checked_sub(amount).unwrap_or(0),
-        );
+        let total_key = (TOTAL_DEPOSITS, token.clone());
+        let total: i128 = instance_get(&env, &total_key).unwrap_or(0);
+        instance_set(&env, &total_key, &total.checked_sub(amount).unwrap_or(0));
 
         Ok(net)
     }
@@ -290,11 +312,12 @@ impl ExamplePaymentsContract {
         env: Env,
         depositor: Address,
         beneficiary: Address,
+        token: Address,
         amount: i128,
         expiry_ledger: u32,
     ) -> Result<u64, Error> {
         depositor.require_auth();
-        let token: Address = instance_get(&env, &TOKEN).ok_or(Error::NotFound)?;
+        require_supported_token(&env, &token)?;
 
         create_escrow(
             &env,
@@ -309,7 +332,9 @@ impl ExamplePaymentsContract {
     /// Release an escrow deposit to the beneficiary. Admin only.
     pub fn release_escrow_entry(env: Env, caller: Address, escrow_id: u64) -> Result<(), Error> {
         auth::require_admin(&env, &caller)?;
-        let token: Address = instance_get(&env, &TOKEN).ok_or(Error::NotFound)?;
+        let token = get_escrow(&env, escrow_id)
+            .ok_or(Error::PaymentEscrowNotFound)?
+            .token;
 
         release_escrow(&env, &token, escrow_id)
     }
@@ -317,7 +342,9 @@ impl ExamplePaymentsContract {
     /// Refund an escrow deposit back to the depositor. Admin only.
     pub fn refund_escrow_entry(env: Env, caller: Address, escrow_id: u64) -> Result<(), Error> {
         auth::require_admin(&env, &caller)?;
-        let token: Address = instance_get(&env, &TOKEN).ok_or(Error::NotFound)?;
+        let token = get_escrow(&env, escrow_id)
+            .ok_or(Error::PaymentEscrowNotFound)?
+            .token;
 
         refund_escrow(&env, &token, escrow_id)
     }
@@ -338,11 +365,11 @@ impl ExamplePaymentsContract {
     pub fn batch_payout(
         env: Env,
         caller: Address,
+        token: Address,
         recipients: soroban_sdk::Vec<(Address, i128)>,
     ) -> shared::batch::BatchResult {
         auth::require_admin(&env, &caller).unwrap();
-
-        let token: Address = instance_get(&env, &TOKEN).expect("token not set");
+        require_supported_token(&env, &token).unwrap();
         let contract_addr = env.current_contract_address();
 
         // Build the Rust slice from the Soroban Vec
@@ -358,6 +385,14 @@ impl ExamplePaymentsContract {
     /// Returns the configured token address.
     pub fn get_token(env: Env) -> Option<Address> {
         instance_get(&env, &TOKEN)
+    }
+}
+
+fn require_supported_token(env: &Env, token: &Address) -> Result<(), Error> {
+    if instance_get(env, &(SUPPORTED_TOKEN, token.clone())).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(Error::PaymentTokenNotSupported)
     }
 }
 
