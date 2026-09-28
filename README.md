@@ -3736,6 +3736,7 @@ This repository contains comprehensive documentation for contract design, gas op
 - [**UPGRADEABILITY.md**](UPGRADEABILITY.md) — System-wide upgrade registry and safe contract upgrade patterns with migration hooks and pre/post-upgrade validation.
 - [**GAS_OPTIMIZATION.md**](GAS_OPTIMIZATION.md) — Gas optimization principles, applied optimizations, benchmark infrastructure, and a checklist for new features.
 - [**SECURITY_BATCH.md**](SECURITY_BATCH.md) — Security analysis of batch operations including reentrancy protection, input validation, and failure semantics.
+- [**docs/IMPORT_PIPELINE.md**](docs/IMPORT_PIPELINE.md) — Bulk import pipeline with pre-flight dry-run validation, duplicate detection, and prescriptive rollback guidance.
 
 ## Module Documentation
 

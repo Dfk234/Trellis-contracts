@@ -50,6 +50,7 @@ commands, the decision points, and the rollback / mitigation paths.
 | Upgrade | `UpgradeAlreadyPending` (906), `MigrationHookFailed` (905) | Stuck release | §3.5 |
 | Escrow / payments | `PaymentEscrow*` (700–710) | Stuck or double release | §3.6 |
 | Quota / abuse | `QuotaExceeded` (22) by many actors | Legit users blocked | §3.7 |
+| Bulk imports | `BatchTooLarge` (940), `InvalidRow` (944), `DuplicateExternalId` (943) | Failed dataset ingest | §3.8 |
 
 Error codes are defined in [`shared/src/errors.rs`](../shared/src/errors.rs).
 
@@ -177,6 +178,24 @@ The current seven-day bump and six-day refresh threshold are defined in
 `shared/src/storage.rs`; change those constants deliberately and review the
 gas impact before deployment.
 
+### 3.8 Bulk import failures & remediation
+
+When a bulk import (`import_aids`) encounters invalid rows or duplicate collisions:
+
+1. **Check Dry-Run First**:
+   Always execute `import_aids_dry_run` before committing. If errors are reported,
+   refer to the returned `RollbackGuidance` and inspect `RowError` entries.
+2. **Atomic Revert (`atom_rev`)**:
+   Under `AllOrNothing` mode, any validation error prevents all persistent writes.
+   Fix the identified rows in the source batch and re-submit.
+3. **Partial Ingest (`part_rem`)**:
+   Under `BestEffort` mode, valid rows are durably written while invalid rows are
+   recorded in `report.errors`. Extract failing `row_id` entries, correct fields,
+   and resubmit either as a delta batch or with `DuplicatePolicy::SkipExisting`
+   to safely skip previously imported records.
+
+See [`IMPORT_PIPELINE.md`](./IMPORT_PIPELINE.md) for complete validation rules and runbooks.
+
 ## 5. Emergency rollback
 
 Use when a release causes incorrect state changes or blocks critical
@@ -238,6 +257,7 @@ post-incident note: root cause, detection gap, and follow-up issues.
 
 ## 6. Reference
 
+- [`IMPORT_PIPELINE.md`](./IMPORT_PIPELINE.md) — bulk import validation, dry-run simulation, and remediation runbooks.
 - [`DIAGNOSTICS.md`](./DIAGNOSTICS.md) — diagnostic tooling details.
 - [`QUOTA.md`](./QUOTA.md) — quota limits and override procedure.
 - [`COMPATIBILITY.md`](./COMPATIBILITY.md) — schema versions and migration.

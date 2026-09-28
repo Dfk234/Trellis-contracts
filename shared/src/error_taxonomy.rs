@@ -17,6 +17,7 @@ pub enum ErrorDomain {
     Registry,
     Marketplace,
     Upgradeability,
+    Import,
 }
 
 /// Broad class used by clients to choose safe recovery behavior.
@@ -519,6 +520,72 @@ fn domain_definition(domain: &ErrorDomain, code: u32) -> Option<Definition> {
             "Settlement confirmation was not received.",
             Some("Retry the pending settlement without submitting another transfer."),
         )),
+        ErrorDomain::Import => Some(match code {
+            940 => definition(
+                "BATCH_TOO_LARGE",
+                ErrorCategory::Validation,
+                false,
+                "The import batch exceeds the maximum allowed row count.",
+                Some("Split the import into batches of 50 to 100 rows and retry."),
+            ),
+            941 => definition(
+                "EMPTY_BATCH",
+                ErrorCategory::Validation,
+                false,
+                "The import batch contains no records.",
+                Some("Include at least one valid record in the batch."),
+            ),
+            942 => definition(
+                "INVALID_CONFIG",
+                ErrorCategory::Configuration,
+                false,
+                "The import configuration is invalid.",
+                Some("Check max_rows and duplicate policy parameters."),
+            ),
+            943 => definition(
+                "DUPLICATE_ID",
+                ErrorCategory::Conflict,
+                false,
+                "Duplicate external identifier detected under RejectDuplicate policy.",
+                Some("Remove duplicates or select SkipExisting or UpdateExisting policy."),
+            ),
+            944 => definition(
+                "INVALID_ROW",
+                ErrorCategory::Validation,
+                false,
+                "One or more rows failed validation in atomic import mode.",
+                Some("Review the row error details, correct the values, and resubmit."),
+            ),
+            945 => definition(
+                "REENTRANCY_DETECTED",
+                ErrorCategory::Conflict,
+                false,
+                "Reentrancy detected during import execution.",
+                Some("Wait for ongoing operations to complete before invoking import."),
+            ),
+            946 => definition(
+                "INVALID_AMOUNT",
+                ErrorCategory::Validation,
+                false,
+                "Import row amount must be strictly positive.",
+                Some("Correct row amounts to positive values and retry."),
+            ),
+            947 => definition(
+                "RECORD_EXPIRED",
+                ErrorCategory::Validation,
+                false,
+                "Import row expiry ledger or timestamp is in the past.",
+                Some("Update expiry values to future timestamps and retry."),
+            ),
+            948 => definition(
+                "EXTERNAL_ID_TOO_LONG",
+                ErrorCategory::Validation,
+                false,
+                "External identifier exceeds the 64-byte limit.",
+                Some("Shorten external IDs to 64 bytes or fewer."),
+            ),
+            _ => return None,
+        }),
         _ => None,
     }
 }
