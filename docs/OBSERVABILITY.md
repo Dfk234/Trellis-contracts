@@ -8,6 +8,15 @@ defines the payload, the metric names, and ready-to-use dashboard queries.
 See also [`DIAGNOSTICS.md`](./DIAGNOSTICS.md) for the local pre-flight script
 and [`RUNBOOK.md`](./RUNBOOK.md) for operational procedures.
 
+## Operational Health Indicators
+
+The `shared::dashboard` module aggregates key indicators to track operational health:
+- **Unresolved Failures & Stale Jobs**: Derived from background worker dead letters (failed beyond retry limits).
+- **Reconciliation Drift**: Derived from the reconciliation module, highlighting mismatch between ledger, off-chain DB, and user caches.
+- **User-Impacting Incidents**: Derived from dependency health checks where critical services are marked degraded or down.
+
+These can be fetched programmatically via the `generate_dashboard` method, which redacts sensitive information such as specific user addresses.
+
 ## Event contract
 
 Every telemetry event is published with:

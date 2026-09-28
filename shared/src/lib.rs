@@ -42,8 +42,12 @@ pub mod telemetry;
 pub mod timeline;
 pub mod utils;
 pub mod webhook;
+pub mod dashboard;
 
 // Re-export the most commonly-needed items at crate root for ergonomic use.
+pub use dashboard::{
+    generate_dashboard, DashboardReport, HealthCategory, RedactedDeadLetter,
+};
 pub use disclosure::{
     DetailField, DetailSeverity, TransactionDetail, TransactionDetailBuilder,
 };
